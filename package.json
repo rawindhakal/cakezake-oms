@@ -1,0 +1,16 @@
+{
+  "name": "cakezake-orders",
+  "version": "1.0.0",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "concurrently --names server,client --prefix-colors red,blue \"cd server && npm run dev\" \"cd client && npm run dev\"",
+    "server": "cd server && npm run dev",
+    "client": "cd client && npm run dev",
+    "install:all": "cd server && npm install --legacy-peer-deps && cd ../client && npm install --legacy-peer-deps",
+    "build": "cd client && npm install && npm run build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
