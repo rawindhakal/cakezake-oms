@@ -45,6 +45,10 @@ export const orderSchema = z.object({
   payment: z.object({
     advance: z.coerce.number().min(0).default(0),
     method:  z.enum(['Cash', 'eSewa', 'Khalti', 'Bank Transfer', 'QR']).optional(),
+    splits:  z.array(z.object({
+      method: z.enum(['Cash', 'eSewa', 'Khalti', 'Bank Transfer', 'QR']),
+      amount: z.coerce.number().min(1, 'Amount required'),
+    })).optional(),
   }),
   fulfillmentType: z.enum(['delivery', 'pickup']).default('delivery'),
   receiver: z.object({

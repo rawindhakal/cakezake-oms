@@ -59,6 +59,10 @@ const OrderSchema = new mongoose.Schema({
     advance: { type: Number, default: 0 },
     due:     { type: Number },
     method:  { type: String, enum: ['Cash', 'eSewa', 'Khalti', 'Bank Transfer', 'QR'] },
+    splits:  [{
+      method: { type: String, enum: ['Cash', 'eSewa', 'Khalti', 'Bank Transfer', 'QR'], required: true },
+      amount: { type: Number, required: true, min: 0 },
+    }],
   },
 
   receiver: {

@@ -257,7 +257,7 @@ router.post('/:id/notify', async (req, res) => {
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
     await sendOrderConfirmation(order);
-    res.json({ success: true, message: 'WhatsApp sent' });
+    res.json({ success: true, message: 'SMS sent' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

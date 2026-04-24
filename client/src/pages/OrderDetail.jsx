@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Edit2, Trash2, Check, Store, ChefHat, Package, Printer, FileText, Tag, Truck, User } from 'lucide-react';
+import { ArrowLeft, Edit2, Trash2, Check, Store, ChefHat, Package, Printer, FileText, Tag, Truck, User, MessageCircle, Send } from 'lucide-react';
 import { printBill, printShippingLabel, printKitchenSheet } from '../lib/print';
 import toast from 'react-hot-toast';
 import dayjs from 'dayjs';
@@ -10,6 +10,37 @@ import StatusBadge from '../components/StatusBadge';
 import api from '../lib/api';
 
 const STATUSES = ['New', 'Confirmed', 'In Production', 'Out for Delivery', 'Delivered', 'Cancelled'];
+
+const BASE_URL = import.meta.env.VITE_CLIENT_URL || window.location.origin;
+
+function buildWhatsAppUrl(order) {
+  if (!order) return '#';
+  const { sender, receiver, payment, delivery, orderNumber, items } = order;
+  const trackLink = `${BASE_URL}/track?order=${orderNumber}`;
+  const itemsList = (items || []).map((i) => `  - ${i.name}: NPR ${Number(i.price).toLocaleString('en-IN')}`).join('\n');
+  const deliveryLine = order.fulfillmentType === 'pickup'
+    ? `Pickup: ${dayjs(delivery?.date).format('DD MMM YYYY')}, ${delivery?.slot || ''}`
+    : `Delivery: ${dayjs(delivery?.date).format('DD MMM YYYY')}, ${delivery?.slot || ''} → ${receiver?.name}, ${receiver?.city || ''}`;
+
+  const msg = [
+    `Hello ${sender?.name}! 🎂 Your CakeZake order is confirmed.`,
+    ``,
+    `Order: *${orderNumber}*`,
+    `Items:\n${itemsList}`,
+    `Total: NPR ${Number(payment?.total).toLocaleString('en-IN')}`,
+    `Advance: NPR ${Number(payment?.advance).toLocaleString('en-IN')}`,
+    `Due: NPR ${Number(payment?.due).toLocaleString('en-IN')}`,
+    ``,
+    deliveryLine,
+    ``,
+    `Track your order: ${trackLink}`,
+    ``,
+    `Thank you for choosing CakeZake! 🧁`,
+  ].join('\n');
+
+  const phone = String(sender?.phone || '').replace(/^\+?977/, '').replace(/\D/g, '');
+  return `https://wa.me/977${phone}?text=${encodeURIComponent(msg)}`;
+}
 
 const ITEM_STATUS_STYLES = {
   Pending:   'bg-gray-100 text-gray-500',
@@ -181,7 +212,21 @@ export default function OrderDetail() {
   const [outletOpen, setOutletOpen] = useState(false);
   const [riderOpen, setRiderOpen]   = useState(false);
   const [riders, setRiders]         = useState([]);
-  const [deleting, setDeleting] = useState(false);
+  const [deleting, setDeleting]   = useState(false);
+  const [smsSending, setSmsSending] = useState(false);
+
+  async function sendSmsConfirmation() {
+    if (!window.confirm(`Send SMS confirmation to ${order?.sender?.name} (${order?.sender?.phone})?`)) return;
+    setSmsSending(true);
+    try {
+      await api.post(`/orders/${id}/notify`);
+      toast.success('SMS sent!');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'SMS failed');
+    } finally {
+      setSmsSending(false);
+    }
+  }
 
   useEffect(() => { fetchOrder(id); }, [id]);
   useEffect(() => { if (!loaded) fetchOutlets(); }, []);
@@ -272,6 +317,27 @@ export default function OrderDetail() {
           {/* Print dropdown */}
           <PrintMenu order={order} />
 
+          {/* WhatsApp click-to-chat */}
+          <a
+            href={buildWhatsAppUrl(order)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Share order details on WhatsApp"
+            className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white font-medium text-sm px-3 py-2 rounded-lg transition-colors"
+          >
+            <MessageCircle size={15} /> WhatsApp
+          </a>
+
+          {/* SparrowSMS confirmation */}
+          <button
+            onClick={sendSmsConfirmation}
+            disabled={smsSending}
+            title="Send SMS confirmation via SparrowSMS"
+            className="flex items-center gap-2 bg-brand-500 hover:bg-brand-600 text-white font-medium text-sm px-3 py-2 rounded-lg transition-colors disabled:opacity-50"
+          >
+            <Send size={15} /> {smsSending ? 'Sending…' : 'SMS'}
+          </button>
+
           <button onClick={() => navigate(`/orders/${id}/edit`)} className="btn-secondary flex items-center gap-2 text-sm">
             <Edit2 size={15} /> Edit
           </button>
@@ -339,7 +405,20 @@ export default function OrderDetail() {
         <div className="card">
           <h2 className="font-semibold mb-3">Payment</h2>
           <div className="space-y-2">
-            <Field label="Method" value={order.payment.method} />
+            {/* Split payment breakdown */}
+            {order.payment.splits?.length > 0 ? (
+              <div className="space-y-1 mb-2">
+                <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-1">Split Payment</p>
+                {order.payment.splits.map((sp, i) => (
+                  <div key={i} className="flex justify-between items-center bg-gray-50 rounded-lg px-3 py-1.5">
+                    <span className="text-sm font-medium text-gray-700">{sp.method}</span>
+                    <span className="text-sm font-semibold text-brand-600">NPR {Number(sp.amount).toLocaleString('en-IN')}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Field label="Method" value={order.payment.method} />
+            )}
             <div className="flex justify-between py-2 border-t mt-2">
               <span className="text-gray-500">Total</span>
               <span className="font-bold">NPR {order.payment.total?.toLocaleString('en-IN')}</span>

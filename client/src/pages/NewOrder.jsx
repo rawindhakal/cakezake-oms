@@ -1,8 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useForm, useFieldArray, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Plus, ArrowLeft, Store, Truck, ShoppingBag } from 'lucide-react';
+import { Plus, ArrowLeft, Store, Truck, ShoppingBag, SplitSquareHorizontal, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { orderSchema } from '../lib/validators';
 import useOrderStore from '../store/orderStore';
@@ -81,8 +81,36 @@ export default function NewOrder() {
   const total   = items.reduce((s, i) => s + (Number(i?.price) || 0), 0);
   const due     = total - Number(advance);
 
+  // Split payment state
+  const [splitMode, setSplitMode] = useState(false);
+  const [splits, setSplits]       = useState([{ method: 'Cash', amount: '' }]);
+  const splitsTotal = splits.reduce((s, sp) => s + (Number(sp.amount) || 0), 0);
+  const splitsDiff  = Number(advance) - splitsTotal;
+
+  function addSplit() {
+    setSplits((prev) => [...prev, { method: 'Cash', amount: '' }]);
+  }
+  function removeSplit(i) {
+    setSplits((prev) => prev.filter((_, idx) => idx !== i));
+  }
+  function updateSplit(i, field, value) {
+    setSplits((prev) => prev.map((sp, idx) => idx === i ? { ...sp, [field]: value } : sp));
+  }
+  function toggleSplitMode() {
+    setSplitMode((v) => {
+      if (!v) setSplits([{ method: 'Cash', amount: advance || '' }]);
+      return !v;
+    });
+  }
+
   async function onSubmit(data) {
     try {
+      if (splitMode) {
+        if (splits.length < 2) return toast.error('Add at least 2 payment methods for split');
+        if (Math.abs(splitsDiff) > 0.01) return toast.error(`Split amounts must equal advance (NPR ${Number(advance).toLocaleString('en-IN')})`);
+        data.payment.splits = splits.map((sp) => ({ method: sp.method, amount: Number(sp.amount) }));
+        data.payment.method = splits[0].method;
+      }
       const res = await createOrder(data);
       if (res.success) {
         toast.success(`Order ${res.order.orderNumber} created!`);
@@ -202,7 +230,21 @@ export default function NewOrder() {
 
         {/* Payment */}
         <div className="card">
-          <h2 className="font-semibold text-lg mb-4">Payment</h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold text-lg">Payment</h2>
+            <button
+              type="button"
+              onClick={toggleSplitMode}
+              className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors ${
+                splitMode
+                  ? 'border-brand-500 bg-brand-50 text-brand-600'
+                  : 'border-gray-200 text-gray-500 hover:border-brand-300 hover:text-brand-500'
+              }`}
+            >
+              <SplitSquareHorizontal size={13} /> Split Payment
+            </button>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="label">Total (NPR)</label>
@@ -216,14 +258,64 @@ export default function NewOrder() {
               <label className="label">Due on Delivery (NPR)</label>
               <input className="input bg-gray-50" value={due.toLocaleString('en-IN')} readOnly />
             </div>
-            <div>
-              <label className="label">Payment Method</label>
-              <select className="input" {...register('payment.method')}>
-                <option value="">Select</option>
-                {METHODS.map((m) => <option key={m}>{m}</option>)}
-              </select>
-            </div>
+
+            {/* Single method (hidden in split mode) */}
+            {!splitMode && (
+              <div>
+                <label className="label">Payment Method</label>
+                <select className="input" {...register('payment.method')}>
+                  <option value="">Select</option>
+                  {METHODS.map((m) => <option key={m}>{m}</option>)}
+                </select>
+              </div>
+            )}
           </div>
+
+          {/* Split payment rows */}
+          {splitMode && (
+            <div className="mt-4 space-y-2">
+              <p className="text-xs text-gray-500 mb-2">
+                Split the advance (NPR {Number(advance).toLocaleString('en-IN')}) across multiple methods.
+              </p>
+              {splits.map((sp, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <select
+                    value={sp.method}
+                    onChange={(e) => updateSplit(i, 'method', e.target.value)}
+                    className="input flex-1"
+                  >
+                    {METHODS.map((m) => <option key={m}>{m}</option>)}
+                  </select>
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder="Amount"
+                    value={sp.amount}
+                    onChange={(e) => updateSplit(i, 'amount', e.target.value)}
+                    className="input w-36"
+                  />
+                  {splits.length > 1 && (
+                    <button type="button" onClick={() => removeSplit(i)} className="text-gray-400 hover:text-red-500">
+                      <X size={16} />
+                    </button>
+                  )}
+                </div>
+              ))}
+
+              <div className="flex items-center justify-between mt-2">
+                <button type="button" onClick={addSplit} className="text-sm text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1">
+                  <Plus size={14} /> Add method
+                </button>
+                <span className={`text-sm font-semibold ${Math.abs(splitsDiff) < 0.01 ? 'text-green-600' : 'text-red-500'}`}>
+                  {Math.abs(splitsDiff) < 0.01
+                    ? '✓ Amounts match'
+                    : splitsDiff > 0
+                      ? `NPR ${splitsDiff.toLocaleString('en-IN')} remaining`
+                      : `NPR ${Math.abs(splitsDiff).toLocaleString('en-IN')} over`}
+                </span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Receiver */}

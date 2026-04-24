@@ -1,55 +1,47 @@
-const twilio = require('twilio');
+'use strict';
 
-const client = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+const { sendSMS } = require('./sms');
 
-function formatItems(items) {
-  return items.map(i => `${i.name} (NPR ${i.price.toLocaleString('en-IN')})`).join(', ');
+const BASE_URL = process.env.CLIENT_URL || 'https://orders.cakezake.com';
+
+function formatItems(items = []) {
+  return items
+    .map((i) => `${i.name} (NPR ${Number(i.price).toLocaleString('en-IN')})`)
+    .join(', ');
+}
+
+function formatDate(date) {
+  return new Date(date).toLocaleDateString('en-IN', { timeZone: 'Asia/Kathmandu' });
+}
+
+function trackingUrl(orderNumber) {
+  return `${BASE_URL}/track?order=${orderNumber}`;
 }
 
 async function sendOrderConfirmation(order) {
   const { sender, receiver, payment, delivery, orderNumber, items } = order;
-  const body = `Hello ${sender.name}! 🎂
 
-Your CakeZake order has been confirmed.
+  const text = [
+    `Hello ${sender.name}! Your CakeZake order ${orderNumber} is confirmed.`,
+    `Items: ${formatItems(items)}`,
+    `Total: NPR ${Number(payment.total).toLocaleString('en-IN')} | Due: NPR ${Number(payment.due).toLocaleString('en-IN')}`,
+    `Delivery: ${formatDate(delivery.date)}, ${delivery.slot}`,
+    `Track your order: ${trackingUrl(orderNumber)}`,
+  ].join('\n');
 
-📋 Order: ${orderNumber}
-🛍️ Items: ${formatItems(items)}
-💰 Total: NPR ${payment.total.toLocaleString('en-IN')}
-✅ Advance Paid: NPR ${payment.advance.toLocaleString('en-IN')}
-💳 Due on Delivery: NPR ${payment.due.toLocaleString('en-IN')}
-
-🚚 Delivery to: ${receiver.name}, ${receiver.city}
-📅 Date: ${new Date(delivery.date).toLocaleDateString('en-IN', { timeZone: 'Asia/Kathmandu' })}
-⏰ Slot: ${delivery.slot}
-
-Thank you for choosing CakeZake! 🧁
-Questions? Reply to this message.`;
-
-  return client.messages.create({
-    from: process.env.TWILIO_WHATSAPP_FROM,
-    to:   `whatsapp:+977${sender.phone.replace(/^0/, '')}`,
-    body,
-  });
+  return sendSMS(sender.phone, text);
 }
 
 async function sendDeliveryReminder(order) {
-  const { sender, receiver, payment, delivery, orderNumber } = order;
-  const body = `Reminder: Your CakeZake order ${orderNumber} is scheduled for delivery tomorrow.
+  const { sender, payment, delivery, orderNumber } = order;
 
-📅 ${new Date(delivery.date).toLocaleDateString('en-IN', { timeZone: 'Asia/Kathmandu' })} | ⏰ ${delivery.slot}
-📍 Delivering to: ${receiver.name}, ${receiver.city}
-💳 Due amount: NPR ${payment.due.toLocaleString('en-IN')}
+  const text = [
+    `Reminder: Order ${orderNumber} delivers tomorrow ${formatDate(delivery.date)} ${delivery.slot}.`,
+    `Due: NPR ${Number(payment.due).toLocaleString('en-IN')}.`,
+    `Track: ${trackingUrl(orderNumber)} - CakeZake`,
+  ].join('\n');
 
-We'll be in touch! — CakeZake 🎂`;
-
-  return client.messages.create({
-    from: process.env.TWILIO_WHATSAPP_FROM,
-    to:   `whatsapp:+977${sender.phone.replace(/^0/, '')}`,
-    body,
-  });
+  return sendSMS(sender.phone, text);
 }
 
-module.exports = { sendOrderConfirmation, sendDeliveryReminder };
+module.exports = { sendOrderConfirmation, sendDeliveryReminder, trackingUrl };
