@@ -29,7 +29,20 @@ connectDB();
 
 app.set('trust proxy', 1);
 app.use(compression());
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc:     ["'self'"],
+      scriptSrc:      ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+      styleSrc:       ["'self'", "'unsafe-inline'"],
+      imgSrc:         ["'self'", 'data:', 'blob:', 'https://res.cloudinary.com'],
+      connectSrc:     ["'self'", 'wss:', 'ws:'],
+      fontSrc:        ["'self'", 'data:'],
+      objectSrc:      ["'none'"],
+      upgradeInsecureRequests: [],
+    },
+  },
+}));
 app.use(cors({
   origin: process.env.CLIENT_URL || 'http://localhost:5173',
   credentials: true,
