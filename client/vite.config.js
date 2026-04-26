@@ -23,7 +23,11 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        // Do not precache HTML: old SW + cached index → broken app after deploy (stale chunk URLs).
+        globPatterns: ['**/*.{js,css,svg,png,ico,woff2}'],
+        cleanupOutdatedCaches: true,
+        // Default plugin navigateFallback precaches index.html — stale shell after deploy.
+        navigateFallback: null,
         runtimeCaching: [
           {
             urlPattern: /^https?.*\/api\/auth\/verify/,

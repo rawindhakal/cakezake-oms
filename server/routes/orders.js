@@ -5,6 +5,7 @@ const XLSX = require('xlsx');
 const Order = require('../models/Order');
 const User = require('../models/User');
 const requireAuth = require('../middleware/auth');
+const requireSuperAdmin = require('../middleware/requireSuperAdmin');
 const generateOrderNumber = require('../utils/orderNumber');
 const { sendOrderConfirmation, sendDeliveryReminder } = require('../utils/notify');
 const { sendNewOrderAlert } = require('../utils/email');
@@ -13,6 +14,52 @@ const { normalizeOrderPhone, isValidOrderPhone } = require('../utils/phone');
 
 const router = express.Router();
 router.use(requireAuth);
+
+function parseOrderFromBackup(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = JSON.parse(JSON.stringify(raw));
+  delete o.__v;
+
+  if (o.delivery?.date) o.delivery.date = new Date(o.delivery.date);
+  if (o.delivery?.signedAt) o.delivery.signedAt = new Date(o.delivery.signedAt);
+  if (o.createdAt) o.createdAt = new Date(o.createdAt);
+  if (o.updatedAt) o.updatedAt = new Date(o.updatedAt);
+  if (o.deletedAt) o.deletedAt = o.deletedAt ? new Date(o.deletedAt) : null;
+
+  if (o.assignedRider === '' || o.assignedRider === undefined || o.assignedRider === null) {
+    o.assignedRider = null;
+  } else if (mongoose.Types.ObjectId.isValid(String(o.assignedRider))) {
+    o.assignedRider = new mongoose.Types.ObjectId(String(o.assignedRider));
+  } else {
+    o.assignedRider = null;
+  }
+
+  if (o.outlet && mongoose.Types.ObjectId.isValid(String(o.outlet))) {
+    o.outlet = new mongoose.Types.ObjectId(String(o.outlet));
+  } else {
+    o.outlet = null;
+  }
+
+  return o;
+}
+
+function backupImportFilterAndDoc(raw) {
+  const doc = parseOrderFromBackup(raw);
+  if (!doc) return null;
+
+  if (doc._id && mongoose.Types.ObjectId.isValid(String(doc._id))) {
+    const id = new mongoose.Types.ObjectId(String(doc._id));
+    doc._id = id;
+    return { filter: { _id: id }, doc };
+  }
+
+  if (doc.orderNumber && String(doc.orderNumber).trim()) {
+    delete doc._id;
+    return { filter: { orderNumber: doc.orderNumber }, doc };
+  }
+
+  return null;
+}
 
 const validateOrder = [
   body('sender.name').trim().notEmpty(),
@@ -72,6 +119,106 @@ router.get('/', async (req, res) => {
     const [orders, total] = await Promise.all([listQuery.lean(), Order.countDocuments(filter)]);
 
     res.json({ success: true, orders, total, page: parseInt(page) });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/** Registered before /:id so "export" is not parsed as an ObjectId. */
+router.get('/export', async (req, res) => {
+  try {
+    const format = String(req.query.format || 'xlsx').toLowerCase();
+
+    if (format === 'json') {
+      const orders = await Order.find({}).lean().sort({ createdAt: -1 });
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename=cakezake-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      );
+      return res.json({
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        orders,
+      });
+    }
+
+    const filter = { isDeleted: { $ne: true }, status: { $ne: 'Cancelled' } };
+    const orders = await Order.find(filter).sort({ createdAt: -1 }).lean();
+    const rows = orders.map((o) => {
+      const delivery = o.delivery || {};
+      const payment = o.payment || {};
+      const sender = o.sender || {};
+      const receiver = o.receiver || {};
+      const items = Array.isArray(o.items) ? o.items : [];
+      return {
+        'Order#': o.orderNumber || '',
+        Date: delivery.date ? new Date(delivery.date).toLocaleDateString('en-IN') : '',
+        Sender: sender.name || '',
+        'Sender Phone': sender.phone || '',
+        Channel: sender.channel || '',
+        Items: items.map((i) => i.name).filter(Boolean).join(', '),
+        'Total (NPR)': payment.total ?? '',
+        'Advance (NPR)': payment.advance ?? '',
+        'Due (NPR)': payment.due ?? '',
+        Method: payment.method || '',
+        Receiver: receiver.name || '',
+        'Receiver Phone': receiver.phone || '',
+        City: receiver.city || '',
+        Slot: delivery.slot || '',
+        Status: o.status || '',
+        Note: o.note || '',
+      };
+    });
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, 'Orders');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Disposition', 'attachment; filename=cakezake-orders.xlsx');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buf);
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.post('/backup/import', requireSuperAdmin, async (req, res) => {
+  try {
+    let list = req.body;
+    if (list && !Array.isArray(list) && Array.isArray(list.orders)) list = list.orders;
+    if (!Array.isArray(list) || list.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Body must be a JSON array of orders or { "orders": [...] }',
+      });
+    }
+
+    let merged = 0;
+    const errors = [];
+
+    for (let i = 0; i < list.length; i++) {
+      const pair = backupImportFilterAndDoc(list[i]);
+      if (!pair) {
+        errors.push({ index: i, message: 'Missing _id or orderNumber' });
+        continue;
+      }
+      try {
+        await Order.replaceOne(pair.filter, pair.doc, { upsert: true });
+        merged += 1;
+      } catch (e) {
+        errors.push({ index: i, orderNumber: pair.doc.orderNumber, message: e.message });
+      }
+    }
+
+    bustStatsCache();
+    res.json({
+      success: errors.length === 0 || merged > 0,
+      merged,
+      failed: errors.length,
+      errors: errors.slice(0, 50),
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -314,41 +461,6 @@ router.post('/:id/remind', async (req, res) => {
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
     await sendDeliveryReminder(order);
     res.json({ success: true, message: 'Reminder sent' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-router.get('/export', async (req, res) => {
-  try {
-    const orders = await Order.find({ status: { $ne: 'Cancelled' } }).sort({ createdAt: -1 });
-    const rows = orders.map((o) => ({
-      'Order#': o.orderNumber,
-      'Date': o.delivery.date ? new Date(o.delivery.date).toLocaleDateString('en-IN') : '',
-      'Sender': o.sender.name,
-      'Sender Phone': o.sender.phone,
-      'Channel': o.sender.channel,
-      'Items': o.items.map((i) => i.name).join(', '),
-      'Total (NPR)': o.payment.total,
-      'Advance (NPR)': o.payment.advance,
-      'Due (NPR)': o.payment.due,
-      'Method': o.payment.method || '',
-      'Receiver': o.receiver.name,
-      'Receiver Phone': o.receiver.phone,
-      'City': o.receiver.city,
-      'Slot': o.delivery.slot || '',
-      'Status': o.status,
-      'Note': o.note || '',
-    }));
-
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(rows);
-    XLSX.utils.book_append_sheet(wb, ws, 'Orders');
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-
-    res.setHeader('Content-Disposition', 'attachment; filename=cakezake-orders.xlsx');
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.send(buf);
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

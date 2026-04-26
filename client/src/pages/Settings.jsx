@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
-import { Plus, Pencil, Trash2, ToggleLeft, ToggleRight, X, ChefHat, Package, KeyRound, Eye, EyeOff, Tag, UserPlus, ShieldCheck, User, Mail, Send } from 'lucide-react';
+import { Plus, Pencil, Trash2, ToggleLeft, ToggleRight, X, ChefHat, Package, KeyRound, Eye, EyeOff, Tag, UserPlus, ShieldCheck, User, Mail, Send, FileSpreadsheet, FileJson, Upload } from 'lucide-react';
 import api from '../lib/api';
 import useSettingsStore from '../store/settingsStore';
 import useAuthStore from '../store/authStore';
@@ -877,6 +877,10 @@ export default function Settings() {
   const [showPw, setShowPw]         = useState(false);
   const [changing, setChanging]     = useState(false);
   const [exporting, setExporting]   = useState(false);
+  const [exportingJson, setExportingJson] = useState(false);
+  const [importing, setImporting]   = useState(false);
+  const importFileRef = useRef(null);
+  const user = useAuthStore((s) => s.user);
 
   useEffect(() => { loadOutlets(); }, []);
 
@@ -924,18 +928,96 @@ export default function Settings() {
     finally { setChanging(false); }
   }
 
+  async function blobErrorMessage(data) {
+    if (!(data instanceof Blob)) return null;
+    try {
+      const text = await data.text();
+      const j = JSON.parse(text);
+      return j.message || text || null;
+    } catch {
+      return null;
+    }
+  }
+
   async function handleExport() {
     setExporting(true);
     try {
       const res = await api.get('/orders/export', { responseType: 'blob' });
+      if (res.data?.type === 'application/json' || String(res.headers['content-type'] || '').includes('application/json')) {
+        const msg = await blobErrorMessage(res.data);
+        toast.error(msg || 'Export failed');
+        return;
+      }
       const url = URL.createObjectURL(res.data);
       const a = document.createElement('a');
       a.href = url;
       a.download = `cakezake-orders-${new Date().toISOString().slice(0, 10)}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch { toast.error('Export failed'); }
-    finally { setExporting(false); }
+      toast.success('Spreadsheet downloaded');
+    } catch (err) {
+      const msg = err.response?.data ? await blobErrorMessage(err.response.data) : null;
+      toast.error(msg || err.response?.data?.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function handleExportJsonBackup() {
+    setExportingJson(true);
+    try {
+      const { data } = await api.get('/orders/export', { params: { format: 'json' } });
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `cakezake-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Full backup downloaded');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Backup export failed');
+    } finally {
+      setExportingJson(false);
+    }
+  }
+
+  async function handleImportBackup(ev) {
+    const file = ev.target.files?.[0];
+    ev.target.value = '';
+    if (!file) return;
+    let payload;
+    try {
+      const text = await file.text();
+      payload = JSON.parse(text);
+    } catch {
+      toast.error('Invalid JSON file');
+      return;
+    }
+    const body = Array.isArray(payload) ? payload : payload.orders;
+    if (!Array.isArray(body)) {
+      toast.error('Backup must be an array of orders or { orders: [...] }');
+      return;
+    }
+    if (!window.confirm(`Import ${body.length} order(s)? Existing records with the same _id or order number will be replaced.`)) {
+      return;
+    }
+    setImporting(true);
+    try {
+      const { data } = await api.post('/orders/backup/import', payload);
+      if (data.merged > 0) {
+        toast.success(`Imported / updated ${data.merged} order(s)${data.failed ? ` (${data.failed} row(s) skipped or failed)` : ''}`);
+      } else {
+        toast.error(data.message || 'Nothing was imported');
+      }
+      if (data.errors?.length) {
+        console.warn('Import issues', data.errors);
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Import failed');
+    } finally {
+      setImporting(false);
+    }
   }
 
   return (
@@ -1012,13 +1094,55 @@ export default function Settings() {
       {/* Email Notifications */}
       <EmailNotifications />
 
-      {/* Export */}
-      <div className="card">
-        <h2 className="font-semibold text-lg mb-2">Export Orders</h2>
-        <p className="text-sm text-gray-500 mb-4">Download all active orders as an Excel file.</p>
-        <button onClick={handleExport} disabled={exporting} className="btn-secondary w-full">
-          {exporting ? 'Generating...' : 'Export to Excel (.xlsx)'}
-        </button>
+      {/* Backup & export */}
+      <div className="card space-y-4">
+        <div>
+          <h2 className="font-semibold text-lg mb-1">Backup & export</h2>
+          <p className="text-sm text-gray-500">
+            Excel is for quick reporting (non-deleted, non-cancelled orders). JSON is a full database backup for restore.
+          </p>
+        </div>
+        <div className="flex flex-col sm:flex-row gap-3">
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={exporting}
+            className="btn-secondary flex-1 inline-flex items-center justify-center gap-2"
+          >
+            <FileSpreadsheet size={18} />
+            {exporting ? 'Generating…' : 'Excel (.xlsx)'}
+          </button>
+          <button
+            type="button"
+            onClick={handleExportJsonBackup}
+            disabled={exportingJson}
+            className="btn-secondary flex-1 inline-flex items-center justify-center gap-2"
+          >
+            <FileJson size={18} />
+            {exportingJson ? 'Preparing…' : 'Full backup (.json)'}
+          </button>
+        </div>
+        {user?.role === 'super_admin' && (
+          <div className="pt-2 border-t border-gray-100">
+            <p className="text-sm text-gray-500 mb-2">Restore from a JSON backup (super admin only).</p>
+            <input
+              ref={importFileRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={handleImportBackup}
+            />
+            <button
+              type="button"
+              onClick={() => importFileRef.current?.click()}
+              disabled={importing}
+              className="btn-primary w-full sm:w-auto inline-flex items-center justify-center gap-2"
+            >
+              <Upload size={18} />
+              {importing ? 'Importing…' : 'Import JSON backup'}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* User Management */}

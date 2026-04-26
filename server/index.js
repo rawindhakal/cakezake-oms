@@ -49,7 +49,7 @@ app.use(cors({
   origin: process.env.CLIENT_URL || 'http://localhost:5173',
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 if (process.env.NODE_ENV === 'development') {
@@ -90,8 +90,21 @@ app.use('/api/sms-config',   smsConfigRoutes);
 
 if (process.env.NODE_ENV === 'production') {
   const clientBuild = path.join(__dirname, '..', 'client', 'dist');
-  app.use(express.static(clientBuild));
-  app.get('*', (req, res) => {
+  app.use(express.static(clientBuild, {
+    setHeaders(res, filePath) {
+      const base = path.basename(filePath);
+      if (base === 'index.html' || base === 'sw.js' || base.startsWith('workbox-')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        return;
+      }
+      if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    },
+  }));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.sendFile(path.join(clientBuild, 'index.html'));
   });
 }
