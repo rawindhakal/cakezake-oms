@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
-import { Plus, Pencil, Trash2, ToggleLeft, ToggleRight, X, ChefHat, Package, KeyRound, Eye, EyeOff, Tag, UserPlus, ShieldCheck, User } from 'lucide-react';
+import { Plus, Pencil, Trash2, ToggleLeft, ToggleRight, X, ChefHat, Package, KeyRound, Eye, EyeOff, Tag, UserPlus, ShieldCheck, User, Mail, Send } from 'lucide-react';
 import api from '../lib/api';
 import useSettingsStore from '../store/settingsStore';
 import useAuthStore from '../store/authStore';
@@ -567,6 +567,305 @@ function UserManagement({ outlets }) {
   );
 }
 
+// ─── SparrowSMS Settings ──────────────────────────────────────────────────────
+
+function SmsSettings() {
+  const [form, setForm]         = useState({ enabled: false, senderId: 'CakeZake', token: '' });
+  const [hasToken, setHasToken] = useState(false);
+  const [loading, setLoading]   = useState(true);
+  const [saving, setSaving]     = useState(false);
+  const [testing, setTesting]   = useState(false);
+  const [testPhone, setTestPhone] = useState('');
+  const [showToken, setShowToken] = useState(false);
+
+  useEffect(() => {
+    api.get('/sms-config')
+      .then(({ data }) => {
+        if (data.config) {
+          setForm((f) => ({ ...f, enabled: data.config.enabled, senderId: data.config.senderId || 'CakeZake' }));
+          setHasToken(!!data.config.hasToken);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  function set(field, value) { setForm((f) => ({ ...f, [field]: value })); }
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const { data } = await api.put('/sms-config', form);
+      setHasToken(!!data.config?.hasToken);
+      setForm((f) => ({ ...f, token: '' }));
+      toast.success('SMS settings saved');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleTest() {
+    if (!testPhone.trim()) return toast.error('Enter a phone number to test');
+    setTesting(true);
+    try {
+      await api.post('/sms-config/test', { phone: testPhone.trim() });
+      toast.success('Test SMS sent!');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Test failed');
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  if (loading) return null;
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="font-semibold text-lg flex items-center gap-2">
+          <Send size={18} className="text-brand-500" /> SparrowSMS
+        </h2>
+        <button
+          type="button"
+          onClick={() => set('enabled', !form.enabled)}
+          className={`flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded-lg border transition-colors ${
+            form.enabled ? 'border-green-400 bg-green-50 text-green-700' : 'border-gray-200 text-gray-400'
+          }`}
+        >
+          {form.enabled ? <ToggleRight size={18} /> : <ToggleLeft size={18} />}
+          {form.enabled ? 'Enabled' : 'Disabled'}
+        </button>
+      </div>
+      <p className="text-sm text-gray-500 mb-5">
+        Send automated SMS confirmations and reminders via SparrowSMS Nepal.
+        Get your token at{' '}
+        <a href="https://sparrowsms.com" target="_blank" rel="noopener noreferrer" className="text-brand-500 underline">sparrowsms.com</a>.
+      </p>
+
+      <form onSubmit={handleSave} className="space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="label">API Token *</label>
+            <div className="relative">
+              <input
+                type={showToken ? 'text' : 'password'}
+                className="input pr-10"
+                placeholder={hasToken ? '(token saved — enter new to replace)' : 'Your SparrowSMS API token'}
+                value={form.token}
+                onChange={(e) => set('token', e.target.value)}
+              />
+              <button type="button" onClick={() => setShowToken((s) => !s)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
+                {showToken ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+            </div>
+            {hasToken && <p className="text-xs text-green-600 mt-1">✓ Token saved</p>}
+          </div>
+          <div>
+            <label className="label">Sender ID</label>
+            <input
+              className="input"
+              placeholder="CakeZake"
+              value={form.senderId}
+              onChange={(e) => set('senderId', e.target.value)}
+            />
+            <p className="text-xs text-gray-400 mt-1">Max 11 characters, no spaces.</p>
+          </div>
+        </div>
+
+        <div className="flex gap-3 pt-2 flex-wrap">
+          <div className="flex gap-2 flex-1 min-w-[200px]">
+            <input
+              className="input flex-1"
+              placeholder="Test phone: 98XXXXXXXX"
+              value={testPhone}
+              onChange={(e) => setTestPhone(e.target.value)}
+            />
+            <button type="button" onClick={handleTest} disabled={testing} className="btn-secondary text-sm whitespace-nowrap">
+              {testing ? 'Sending…' : 'Send Test'}
+            </button>
+          </div>
+          <button type="submit" disabled={saving} className="btn-primary text-sm">
+            {saving ? 'Saving…' : 'Save Settings'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ─── Email Notifications ──────────────────────────────────────────────────────
+
+function EmailNotifications() {
+  const DEFAULTS = { enabled: false, adminEmail: '', fromName: 'CakeZake Orders', fromEmail: '', host: '', port: 587, secure: false, user: '', pass: '' };
+  const [form, setForm]       = useState(DEFAULTS);
+  const [hasPass, setHasPass] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving]   = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [showPass, setShowPass] = useState(false);
+
+  useEffect(() => {
+    api.get('/email-config')
+      .then(({ data }) => {
+        if (data.config) {
+          const { _id, __v, hasPass: hp, ...fields } = data.config;
+          setForm((f) => ({ ...f, ...fields, pass: '' }));
+          setHasPass(!!hp);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  function set(field, value) {
+    setForm((f) => ({ ...f, [field]: value }));
+  }
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const { data: res } = await api.put('/email-config', form);
+      const saved = res.config?.hasPass ?? (!!form.pass || hasPass);
+      setHasPass(saved);
+      setForm((f) => ({ ...f, pass: '' }));
+      toast.success('Email settings saved');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleTest() {
+    if (!form.host || !form.user) {
+      return toast.error('Fill in host and username first');
+    }
+    if (!form.pass && !hasPass) {
+      return toast.error('Enter and save a password first');
+    }
+    setTesting(true);
+    try {
+      await api.post('/email-config/test', form);
+      toast.success('Test email sent! Check your inbox.');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Test failed');
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  if (loading) return null;
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="font-semibold text-lg flex items-center gap-2">
+          <Mail size={18} className="text-brand-500" /> Email Notifications
+        </h2>
+        <button
+          type="button"
+          onClick={() => set('enabled', !form.enabled)}
+          className={`flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded-lg border transition-colors ${
+            form.enabled ? 'border-green-400 bg-green-50 text-green-700' : 'border-gray-200 text-gray-400'
+          }`}
+        >
+          {form.enabled ? <ToggleRight size={18} /> : <ToggleLeft size={18} />}
+          {form.enabled ? 'Enabled' : 'Disabled'}
+        </button>
+      </div>
+      <p className="text-sm text-gray-500 mb-5">
+        Sends an email to the admin whenever a new order is placed.
+      </p>
+
+      <form onSubmit={handleSave} className="space-y-4">
+        {/* Admin & From */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="label">Admin Email (receives alerts) *</label>
+            <input className="input" type="email" placeholder="admin@cakezake.com" value={form.adminEmail} onChange={(e) => set('adminEmail', e.target.value)} />
+          </div>
+          <div>
+            <label className="label">From Name</label>
+            <input className="input" placeholder="CakeZake Orders" value={form.fromName} onChange={(e) => set('fromName', e.target.value)} />
+          </div>
+          <div>
+            <label className="label">From Email</label>
+            <input className="input" type="email" placeholder="orders@cakezake.com" value={form.fromEmail} onChange={(e) => set('fromEmail', e.target.value)} />
+          </div>
+        </div>
+
+        {/* SMTP */}
+        <div className="border-t border-gray-100 pt-4">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">SMTP Settings</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="label">SMTP Host *</label>
+              <input className="input" placeholder="smtp.gmail.com" value={form.host} onChange={(e) => set('host', e.target.value)} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Port</label>
+                <input className="input" type="number" value={form.port} onChange={(e) => set('port', e.target.value)} />
+              </div>
+              <div className="flex flex-col justify-end pb-0.5">
+                <label className="label">SSL/TLS</label>
+                <button
+                  type="button"
+                  onClick={() => set('secure', !form.secure)}
+                  className={`flex items-center gap-2 text-sm px-3 py-2 rounded-lg border transition-colors ${
+                    form.secure ? 'border-brand-400 bg-brand-50 text-brand-700' : 'border-gray-200 text-gray-400'
+                  }`}
+                >
+                  {form.secure ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+                  {form.secure ? 'SSL (465)' : 'TLS (587)'}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="label">Username / Email *</label>
+              <input className="input" placeholder="your@gmail.com" value={form.user} onChange={(e) => set('user', e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Password / App Password *</label>
+              <div className="relative">
+                <input
+                  type={showPass ? 'text' : 'password'}
+                  className="input pr-10"
+                  placeholder={hasPass ? '(unchanged — enter new to replace)' : 'SMTP password'}
+                  value={form.pass}
+                  onChange={(e) => set('pass', e.target.value)}
+                />
+                <button type="button" onClick={() => setShowPass((s) => !s)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
+                  {showPass ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+              </div>
+              <p className="text-xs text-gray-400 mt-1">For Gmail use an App Password, not your account password.</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex gap-3 pt-2">
+          <button
+            type="button"
+            onClick={handleTest}
+            disabled={testing}
+            className="flex items-center gap-2 btn-secondary text-sm"
+          >
+            <Send size={14} /> {testing ? 'Sending…' : 'Send Test Email'}
+          </button>
+          <button type="submit" disabled={saving} className="btn-primary text-sm">
+            {saving ? 'Saving…' : 'Save Settings'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 // ─── Settings Page ────────────────────────────────────────────────────────────
 
 export default function Settings() {
@@ -706,6 +1005,12 @@ export default function Settings() {
           </button>
         </form>
       </div>
+
+      {/* SMS Settings */}
+      <SmsSettings />
+
+      {/* Email Notifications */}
+      <EmailNotifications />
 
       {/* Export */}
       <div className="card">

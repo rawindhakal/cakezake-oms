@@ -1,26 +1,36 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const { body, validationResult } = require('express-validator');
 const XLSX = require('xlsx');
 const Order = require('../models/Order');
+const User = require('../models/User');
 const requireAuth = require('../middleware/auth');
 const generateOrderNumber = require('../utils/orderNumber');
 const { sendOrderConfirmation, sendDeliveryReminder } = require('../utils/notify');
+const { sendNewOrderAlert } = require('../utils/email');
 const { bustStatsCache } = require('./stats');
+const { normalizeOrderPhone, isValidOrderPhone } = require('../utils/phone');
 
 const router = express.Router();
 router.use(requireAuth);
 
 const validateOrder = [
   body('sender.name').trim().notEmpty(),
-  body('sender.phone').matches(/^(97|98)\d{8}$/),
+  body('sender.phone').custom((v) => isValidOrderPhone(v)).withMessage('Invalid sender phone'),
   body('sender.channel').isIn(['Instagram', 'Facebook', 'WhatsApp', 'Website', 'Walk-in', 'Phone Call']),
   body('items').isArray({ min: 1 }),
   body('items.*.name').trim().notEmpty(),
   body('items.*.price').isFloat({ min: 0 }),
   body('receiver.name').trim().notEmpty(),
-  body('receiver.phone').matches(/^(97|98)\d{8}$/),
-  body('receiver.city').trim().notEmpty(),
-  body('delivery.date').isISO8601(),
+  body('receiver.phone').custom((v) => isValidOrderPhone(v)).withMessage('Invalid receiver phone'),
+  body('receiver.city')
+    .trim()
+    .custom((value, { req }) => {
+      if (req.body.fulfillmentType === 'pickup') return true;
+      if (!value) throw new Error('City is required for delivery orders');
+      return true;
+    }),
+  body('delivery.date').isISO8601({ strict: false }),
 ];
 
 router.get('/', async (req, res) => {
@@ -49,16 +59,17 @@ router.get('/', async (req, res) => {
     if (req.query.assignedRider) filter.assignedRider = req.query.assignedRider;
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    const [orders, total] = await Promise.all([
-      Order.find(filter)
-        .select('orderNumber sender.name sender.phone sender.channel items.name items.price payment.total payment.due payment.advance receiver.city receiver.name delivery.date delivery.slot status outlet assignedRider createdAt')
-        .populate('outlet', 'name city')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(parseInt(limit))
-        .lean(),
-      Order.countDocuments(filter),
-    ]);
+    const listQuery = Order.find(filter)
+      .populate('outlet', 'name city')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+    if (!req.query.outlet && !req.query.assignedRider) {
+      listQuery.select(
+        'orderNumber sender.name sender.phone sender.channel items.name items.price items.category items._id items.itemStatus payment.total payment.due payment.advance receiver.city receiver.name delivery.date delivery.slot delivery.partner delivery.notes status outlet assignedRider createdAt',
+      );
+    }
+    const [orders, total] = await Promise.all([listQuery.lean(), Order.countDocuments(filter)]);
 
     res.json({ success: true, orders, total, page: parseInt(page) });
   } catch (err) {
@@ -94,13 +105,24 @@ router.post('/', validateOrder, async (req, res) => {
 
     const orderNumber = await generateOrderNumber();
 
+    const receiver = { ...data.receiver };
+    if (data.fulfillmentType === 'pickup' && !(receiver.city && String(receiver.city).trim())) {
+      receiver.city = 'Pickup';
+    }
+
+    const senderNorm = { ...data.sender, phone: normalizeOrderPhone(data.sender.phone) };
+    const receiverNorm = { ...receiver, phone: normalizeOrderPhone(receiver.phone) };
+
     const order = await Order.create({
       ...data,
+      sender: senderNorm,
+      receiver: receiverNorm,
       orderNumber,
       payment: { ...data.payment, total, advance, due },
     });
 
     bustStatsCache();
+    sendNewOrderAlert(order); // fire-and-forget
     res.status(201).json({ success: true, order });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -110,6 +132,21 @@ router.post('/', validateOrder, async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const data = req.body;
+
+    if (data.sender?.phone != null) {
+      try {
+        data.sender = { ...data.sender, phone: normalizeOrderPhone(data.sender.phone) };
+      } catch (e) {
+        return res.status(400).json({ success: false, message: e.message });
+      }
+    }
+    if (data.receiver?.phone != null) {
+      try {
+        data.receiver = { ...data.receiver, phone: normalizeOrderPhone(data.receiver.phone) };
+      } catch (e) {
+        return res.status(400).json({ success: false, message: e.message });
+      }
+    }
 
     if (data.items?.length) {
       const total = data.items.reduce((sum, item) => sum + Number(item.price), 0);
@@ -167,7 +204,15 @@ router.patch('/:id/items/:itemId/status', async (req, res) => {
 // Assign a delivery rider to an order
 router.patch('/:id/assign-rider', async (req, res) => {
   try {
-    const { riderId } = req.body;
+    let { riderId } = req.body;
+    if (riderId === '' || riderId === undefined) riderId = null;
+    if (riderId && !mongoose.Types.ObjectId.isValid(riderId)) {
+      return res.status(400).json({ success: false, message: 'Invalid rider id' });
+    }
+    if (riderId) {
+      const rider = await User.findOne({ _id: riderId, role: 'rider', isActive: true });
+      if (!rider) return res.status(400).json({ success: false, message: 'Rider not found or inactive' });
+    }
     const order = await Order.findByIdAndUpdate(
       req.params.id,
       { assignedRider: riderId || null },

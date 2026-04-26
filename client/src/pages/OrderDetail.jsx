@@ -8,10 +8,23 @@ import useOrderStore from '../store/orderStore';
 import useOutletStore from '../store/outletStore';
 import StatusBadge from '../components/StatusBadge';
 import api from '../lib/api';
+import { formatPhoneDisplay } from '../lib/phoneIntl';
 
 const STATUSES = ['New', 'Confirmed', 'In Production', 'Out for Delivery', 'Delivered', 'Cancelled'];
 
 const BASE_URL = import.meta.env.VITE_CLIENT_URL || window.location.origin;
+
+
+function sameId(a, b) {
+  if (a == null || b == null) return false;
+  return String(a) === String(b);
+}
+
+function outletIdFromOrder(order) {
+  const o = order?.outlet;
+  if (!o) return null;
+  return typeof o === 'object' && o._id != null ? o._id : o;
+}
 
 function buildWhatsAppUrl(order) {
   if (!order) return '#';
@@ -38,8 +51,9 @@ function buildWhatsAppUrl(order) {
     `Thank you for choosing CakeZake! 🧁`,
   ].join('\n');
 
-  const phone = String(sender?.phone || '').replace(/^\+?977/, '').replace(/\D/g, '');
-  return `https://wa.me/977${phone}?text=${encodeURIComponent(msg)}`;
+  const digits = String(sender?.phone || '').replace(/\D/g, '');
+  if (digits.length < 10) return '#';
+  return `https://wa.me/${digits}?text=${encodeURIComponent(msg)}`;
 }
 
 const ITEM_STATUS_STYLES = {
@@ -237,33 +251,44 @@ export default function OrderDetail() {
     toast.success(`Status → ${s}`);
   }
 
+  const outletIdForRiders = order ? outletIdFromOrder(order) : null;
   useEffect(() => {
-    if (!order?.outlet) return;
-    const outletId = order.outlet._id || order.outlet;
-    api.get(`/users/riders?outlet=${outletId}`)
-      .then(({ data }) => { if (data.success) setRiders(data.riders); })
-      .catch(() => {});
-  }, [order?.outlet]);
+    if (!outletIdForRiders) {
+      setRiders([]);
+      return;
+    }
+    let cancelled = false;
+    api.get('/users/riders', { params: { outlet: String(outletIdForRiders) } })
+      .then(({ data }) => {
+        if (!cancelled && data.success) setRiders(data.riders);
+      })
+      .catch(() => { if (!cancelled) setRiders([]); });
+    return () => { cancelled = true; };
+  }, [outletIdForRiders]);
 
   async function handleAssignRider(riderId) {
     try {
-      await api.patch(`/orders/${id}/assign-rider`, { riderId: riderId || null });
+      const { data } = await api.patch(`/orders/${id}/assign-rider`, { riderId: riderId || null });
+      if (!data.success) {
+        toast.error(data.message || 'Could not assign rider');
+        return;
+      }
       await fetchOrder(id);
       setRiderOpen(false);
       toast.success(riderId ? 'Rider assigned' : 'Rider removed');
-    } catch {
-      toast.error('Could not assign rider');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not assign rider');
     }
   }
 
   async function handleAssignOutlet(outletId) {
     try {
-      await api.put(`/orders/${id}`, { outlet: outletId || null });
+      await api.put(`/orders/${id}`, { outlet: outletId ? outletId : null });
       await fetchOrder(id);
       setOutletOpen(false);
       toast.success(outletId ? 'Outlet assigned' : 'Outlet removed');
-    } catch {
-      toast.error('Could not update outlet');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not update outlet');
     }
   }
 
@@ -373,7 +398,7 @@ export default function OrderDetail() {
           <h2 className="font-semibold mb-3">Sender</h2>
           <div className="space-y-2">
             <Field label="Name" value={order.sender.name} />
-            <Field label="Phone" value={order.sender.phone} />
+            <Field label="Phone" value={formatPhoneDisplay(order.sender.phone)} />
             <Field label="Social ID" value={order.sender.socialId} />
             <Field label="Channel" value={order.sender.channel} />
           </div>
@@ -384,7 +409,7 @@ export default function OrderDetail() {
           <h2 className="font-semibold mb-3">Receiver</h2>
           <div className="space-y-2">
             <Field label="Name" value={order.receiver.name} />
-            <Field label="Phone" value={order.receiver.phone} />
+            <Field label="Phone" value={formatPhoneDisplay(order.receiver.phone)} />
             <Field label="City" value={order.receiver.city} />
             <Field label="Landmark" value={order.receiver.landmark} />
           </div>
@@ -441,28 +466,30 @@ export default function OrderDetail() {
       <div className="mb-5 rounded-2xl border-2 border-gray-100 overflow-hidden">
 
         {/* Panel header */}
-        <div className="flex justify-between items-center px-5 py-3 bg-gray-50 border-b border-gray-100">
-          <div className="flex items-center gap-2">
-            <Store size={16} className="text-brand-500" />
-            <span className="font-semibold text-gray-700">Assigned Outlet</span>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between px-4 sm:px-5 py-3 bg-gray-50 border-b border-gray-100">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+            <Store size={16} className="text-brand-500 flex-shrink-0" />
+            <span className="font-semibold text-gray-700 whitespace-nowrap">Assigned Outlet</span>
             {order.outlet && (
-              <span className="font-bold text-gray-900">{order.outlet.name}</span>
+              <span className="font-bold text-gray-900 truncate max-w-[12rem] sm:max-w-none">{order.outlet.name}</span>
             )}
             {order.outlet?.city && (
               <span className="text-sm text-gray-400">· {order.outlet.city}</span>
             )}
           </div>
-          <div className="relative">
+          <div className="relative self-start sm:self-auto">
             <button
-              onClick={() => setOutletOpen((v) => !v)}
-              className="text-sm text-brand-600 hover:text-brand-700 font-medium px-3 py-1.5 rounded-lg hover:bg-brand-50 border border-brand-200 flex items-center gap-1"
+              type="button"
+              onClick={() => setOutletOpen((v) => { const next = !v; if (!v) fetchOutlets(); return next; })}
+              className="text-sm text-brand-600 hover:text-brand-700 font-medium px-3 py-1.5 rounded-lg hover:bg-brand-50 border border-brand-200 inline-flex items-center gap-1"
             >
               {order.outlet ? 'Reassign' : '+ Assign outlet'}
               <span className="text-gray-400 text-xs">▼</span>
             </button>
             {outletOpen && (
-              <div className="absolute right-0 top-full mt-1 bg-white border border-gray-100 rounded-xl shadow-lg z-10 w-64 py-1">
+              <div className="absolute left-0 sm:left-auto sm:right-0 top-full mt-1 bg-white border border-gray-100 rounded-xl shadow-lg z-20 w-[min(calc(100vw-2rem),20rem)] max-h-[min(70vh,22rem)] overflow-y-auto py-1">
                 <button
+                  type="button"
                   onClick={() => handleAssignOutlet('')}
                   className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 text-gray-400 italic"
                 >
@@ -471,15 +498,16 @@ export default function OrderDetail() {
                 <div className="border-t border-gray-50 my-1" />
                 {outlets.filter((o) => o.isActive).map((o) => (
                   <button
+                    type="button"
                     key={o._id}
                     onClick={() => handleAssignOutlet(o._id)}
-                    className={`w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center gap-2 ${order.outlet?._id === o._id ? 'text-brand-600' : ''}`}
+                    className={`w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-start gap-2 ${sameId(outletIdFromOrder(order), o._id) ? 'text-brand-600 bg-brand-50/50' : ''}`}
                   >
-                    {order.outlet?._id === o._id
-                      ? <Check size={14} className="text-brand-500 flex-shrink-0" />
-                      : <span className="w-3.5" />}
-                    <div>
-                      <div className="font-medium">{o.name}</div>
+                    {sameId(outletIdFromOrder(order), o._id)
+                      ? <Check size={14} className="text-brand-500 flex-shrink-0 mt-0.5" />
+                      : <span className="w-3.5 flex-shrink-0" />}
+                    <div className="min-w-0">
+                      <div className="font-medium break-words">{o.name}</div>
                       <div className="text-xs text-gray-400">{o.city}</div>
                     </div>
                   </button>
@@ -490,7 +518,7 @@ export default function OrderDetail() {
         </div>
 
         {order.outlet ? (
-          <div className="grid grid-cols-2 divide-x divide-gray-100">
+          <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100">
 
             {/* Kitchen */}
             <div className="p-5">
@@ -590,29 +618,31 @@ export default function OrderDetail() {
 
       {/* Rider Assignment */}
       <div className="mb-5 rounded-2xl border-2 border-gray-100 overflow-hidden">
-        <div className="flex justify-between items-center px-5 py-3 bg-gray-50 border-b border-gray-100">
-          <div className="flex items-center gap-2">
-            <Truck size={16} className="text-green-600" />
-            <span className="font-semibold text-gray-700">Delivery Rider</span>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between px-4 sm:px-5 py-3 bg-gray-50 border-b border-gray-100">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+            <Truck size={16} className="text-green-600 flex-shrink-0" />
+            <span className="font-semibold text-gray-700 whitespace-nowrap">Delivery Rider</span>
             {order.assignedRider && (
-              <span className="font-bold text-gray-900">{order.assignedRider.name}</span>
+              <span className="font-bold text-gray-900 truncate max-w-[10rem] sm:max-w-none">{order.assignedRider.name}</span>
             )}
             {order.assignedRider?.username && (
               <span className="text-sm text-gray-400">· @{order.assignedRider.username}</span>
             )}
           </div>
-          {order.outlet && (
-            <div className="relative">
+          {outletIdForRiders && (
+            <div className="relative self-start sm:self-auto">
               <button
+                type="button"
                 onClick={() => setRiderOpen((v) => !v)}
-                className="text-sm text-green-700 hover:text-green-800 font-medium px-3 py-1.5 rounded-lg hover:bg-green-50 border border-green-200 flex items-center gap-1"
+                className="text-sm text-green-700 hover:text-green-800 font-medium px-3 py-1.5 rounded-lg hover:bg-green-50 border border-green-200 inline-flex items-center gap-1"
               >
                 {order.assignedRider ? 'Reassign' : '+ Assign rider'}
                 <span className="text-gray-400 text-xs">▼</span>
               </button>
               {riderOpen && (
-                <div className="absolute right-0 top-full mt-1 bg-white border border-gray-100 rounded-xl shadow-lg z-10 w-64 py-1">
+                <div className="absolute left-0 sm:left-auto sm:right-0 top-full mt-1 bg-white border border-gray-100 rounded-xl shadow-lg z-20 w-[min(calc(100vw-2rem),20rem)] max-h-[min(70vh,22rem)] overflow-y-auto py-1">
                   <button
+                    type="button"
                     onClick={() => handleAssignRider('')}
                     className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 text-gray-400 italic"
                   >
@@ -620,19 +650,20 @@ export default function OrderDetail() {
                   </button>
                   <div className="border-t border-gray-50 my-1" />
                   {riders.length === 0 ? (
-                    <p className="px-4 py-3 text-sm text-gray-400 italic">No riders linked to this outlet.</p>
+                    <p className="px-4 py-3 text-sm text-gray-400 italic">No riders available. Add active riders in Settings, or assign riders to this outlet (or leave rider outlets empty for all-outlet access).</p>
                   ) : (
                     riders.map((r) => (
                       <button
+                        type="button"
                         key={r._id}
                         onClick={() => handleAssignRider(r._id)}
-                        className={`w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center gap-2 ${order.assignedRider?._id === r._id ? 'text-green-700' : ''}`}
+                        className={`w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-start gap-2 ${sameId(order.assignedRider?._id, r._id) ? 'text-green-700 bg-green-50/50' : ''}`}
                       >
-                        {order.assignedRider?._id === r._id
-                          ? <Check size={14} className="text-green-600 flex-shrink-0" />
-                          : <span className="w-3.5" />}
-                        <div>
-                          <div className="font-medium">{r.name}</div>
+                        {sameId(order.assignedRider?._id, r._id)
+                          ? <Check size={14} className="text-green-600 flex-shrink-0 mt-0.5" />
+                          : <span className="w-3.5 flex-shrink-0" />}
+                        <div className="min-w-0">
+                          <div className="font-medium break-words">{r.name}</div>
                           <div className="text-xs text-gray-400">@{r.username}</div>
                         </div>
                       </button>

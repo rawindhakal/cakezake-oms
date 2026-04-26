@@ -163,6 +163,7 @@ export default function Dashboard() {
   const [data, setData]             = useState(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [chartsLoading, setChartsLoading]   = useState(true);
+  const [onThisDay, setOnThisDay]   = useState([]);
   const [preset, setPreset]         = useState('30d');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd]     = useState('');
@@ -213,6 +214,12 @@ export default function Dashboard() {
     fetchSummary(preset, customStart, customEnd);
     fetchCharts(preset, customStart, customEnd);
   }, [preset, customStart, customEnd]);
+
+  useEffect(() => {
+    api.get('/stats/on-this-day')
+      .then(({ data: res }) => { if (res.success) setOnThisDay(res.data || []); })
+      .catch(() => {});
+  }, []);
 
   const s = summary || data?.summary || {};
   const revenueChart = data?.revenueChart || [];
@@ -505,6 +512,53 @@ export default function Dashboard() {
               )}
             </div>
           </div>
+
+          {/* On This Day */}
+          {onThisDay.length > 0 && (
+            <div className="card mt-5">
+              <div className="flex items-center gap-2 mb-4">
+                <span className="text-xl">📅</span>
+                <div>
+                  <h2 className="font-semibold text-gray-700">On This Day</h2>
+                  <p className="text-xs text-gray-400">Orders delivered on {dayjs().format('MMMM D')} in previous years</p>
+                </div>
+              </div>
+              <div className="space-y-5">
+                {onThisDay.map(({ year, orders }) => (
+                  <div key={year}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-xs font-bold text-white bg-brand-500 px-2 py-0.5 rounded-full">{year}</span>
+                      <span className="text-xs text-gray-400">{orders.length} order{orders.length > 1 ? 's' : ''} · NPR {orders.reduce((s, o) => s + (o.payment?.total || 0), 0).toLocaleString('en-IN')}</span>
+                    </div>
+                    <div className="divide-y divide-gray-50 -mx-1">
+                      {orders.map((o) => (
+                        <div
+                          key={o._id}
+                          onClick={() => navigate(`/orders/${o._id}`)}
+                          className="py-2.5 px-1 flex justify-between items-start cursor-pointer hover:bg-gray-50 rounded-lg transition-colors gap-2"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <span className="font-semibold text-brand-600 text-sm">{o.orderNumber}</span>
+                            <span className="ml-2 text-sm text-gray-700">{o.sender?.name}</span>
+                            {o.items?.length > 0 && (
+                              <p className="text-xs text-gray-400 mt-0.5 truncate">
+                                {o.items.map((i) => i.name).join(', ')}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex flex-col items-end flex-shrink-0 gap-1">
+                            <span className="text-sm font-semibold text-gray-700">NPR {Number(o.payment?.total || 0).toLocaleString('en-IN')}</span>
+                            <StatusBadge status={o.status} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           </>}
         </>
       )}

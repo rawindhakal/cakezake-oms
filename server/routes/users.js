@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
 const requireAuth = require('../middleware/auth');
 const requireSuperAdmin = require('../middleware/requireSuperAdmin');
@@ -11,7 +12,14 @@ router.get('/riders', requireAuth, async (req, res) => {
   try {
     const { outlet } = req.query;
     const filter = { role: 'rider', isActive: true };
-    if (outlet) filter.assignedOutlets = outlet;
+    // Riders explicitly linked to this outlet, OR riders with no outlet restriction (empty / unset list)
+    if (outlet && mongoose.Types.ObjectId.isValid(outlet)) {
+      filter.$or = [
+        { assignedOutlets: outlet },
+        { assignedOutlets: { $exists: false } },
+        { assignedOutlets: { $size: 0 } },
+      ];
+    }
     const riders = await User.find(filter, '-password').populate('assignedOutlets', '_id name city').sort({ name: 1 });
     res.json({ success: true, riders });
   } catch (err) {

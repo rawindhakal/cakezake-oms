@@ -362,5 +362,35 @@ router.get('/revenue-7days', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
+// GET /api/stats/on-this-day — orders on the same month/day in previous years
+router.get('/on-this-day', async (req, res) => {
+  try {
+    const now      = new Date();
+    const month    = now.getMonth();
+    const day      = now.getDate();
+    const thisYear = now.getFullYear();
+
+    const years = Array.from({ length: 5 }, (_, i) => thisYear - 1 - i);
+
+    const results = await Promise.all(years.map(async (year) => {
+      const start = new Date(year, month, day, 0, 0, 0);
+      const end   = new Date(year, month, day, 23, 59, 59, 999);
+      const orders = await Order.find({
+        'delivery.date': { $gte: start, $lte: end },
+        status: { $ne: 'Cancelled' },
+        isDeleted: { $ne: true },
+      })
+      .select('orderNumber sender items payment status delivery')
+      .lean();
+      return { year, orders };
+    }));
+
+    const filtered = results.filter((r) => r.orders.length > 0);
+    res.json({ success: true, data: filtered });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 module.exports = router;
 module.exports.bustStatsCache = bustCache;

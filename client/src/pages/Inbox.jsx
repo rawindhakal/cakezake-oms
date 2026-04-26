@@ -7,6 +7,8 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import useAuthStore from '../store/authStore';
 import useInboxStore from '../store/inboxStore';
 import api from '../lib/api';
+import PhoneField from '../components/PhoneField';
+import { isValidIntlPhoneDigits } from '../lib/phoneIntl';
 
 dayjs.extend(relativeTime);
 
@@ -210,8 +212,10 @@ function QuickOrderPanel({ conv, onClose, onOrderCreated }) {
     e.preventDefault();
     if (!form.outlet) return toast.error('Select an outlet');
     if (!form.sender.name || !form.sender.phone) return toast.error('Sender name and phone required');
+    if (!isValidIntlPhoneDigits(form.sender.phone)) return toast.error('Enter a valid sender phone with country code');
     if (!form.items.some(i => i.name)) return toast.error('At least one item name required');
     if (!form.receiver.name || !form.receiver.phone || !form.receiver.city) return toast.error('Receiver details required');
+    if (!isValidIntlPhoneDigits(form.receiver.phone)) return toast.error('Enter a valid receiver phone with country code');
     if (!form.delivery.date) return toast.error('Delivery date required');
 
     setSubmitting(true);
@@ -293,8 +297,11 @@ function QuickOrderPanel({ conv, onClose, onOrderCreated }) {
               <input value={form.sender.name} onChange={e => setField('sender.name', e.target.value)} className={input} placeholder="Customer name" />
             </div>
             <div>
-              <label className={label}>Phone *</label>
-              <input value={form.sender.phone} onChange={e => setField('sender.phone', e.target.value)} className={input} placeholder="98XXXXXXXX" />
+              <PhoneField
+                label="Phone *"
+                value={form.sender.phone}
+                onChange={(v) => setField('sender.phone', v)}
+              />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
@@ -391,16 +398,15 @@ function QuickOrderPanel({ conv, onClose, onOrderCreated }) {
         <div>
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Receiver</p>
           <div className="space-y-2">
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className={label}>Name *</label>
-                <input value={form.receiver.name} onChange={e => setField('receiver.name', e.target.value)} className={input} placeholder="Receiver name" />
-              </div>
-              <div>
-                <label className={label}>Phone *</label>
-                <input value={form.receiver.phone} onChange={e => setField('receiver.phone', e.target.value)} className={input} placeholder="98XXXXXXXX" />
-              </div>
+            <div>
+              <label className={label}>Name *</label>
+              <input value={form.receiver.name} onChange={e => setField('receiver.name', e.target.value)} className={input} placeholder="Receiver name" />
             </div>
+            <PhoneField
+              label="Phone *"
+              value={form.receiver.phone}
+              onChange={(v) => setField('receiver.phone', v)}
+            />
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className={label}>City *</label>

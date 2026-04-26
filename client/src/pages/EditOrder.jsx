@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useForm, useFieldArray, useWatch } from 'react-hook-form';
+import { useForm, useFieldArray, useWatch, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Plus, ArrowLeft, Store } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -11,6 +11,7 @@ import useOutletStore from '../store/outletStore';
 import useSettingsStore from '../store/settingsStore';
 import ItemRow from '../components/ItemRow';
 import DeliverySlotPicker from '../components/DeliverySlotPicker';
+import PhoneField from '../components/PhoneField';
 
 const CHANNELS = ['Instagram', 'Facebook', 'WhatsApp', 'Website', 'Walk-in', 'Phone Call'];
 const METHODS  = ['Cash', 'eSewa', 'Khalti', 'Bank Transfer', 'QR'];
@@ -144,10 +145,20 @@ export default function EditOrder() {
               <input className="input" {...register('sender.name')} />
               {errors.sender?.name && <p className="text-red-500 text-xs mt-1">{errors.sender.name.message}</p>}
             </div>
-            <div>
-              <label className="label">Phone * (97/98XXXXXXXX)</label>
-              <input className="input" {...register('sender.phone')} />
-              {errors.sender?.phone && <p className="text-red-500 text-xs mt-1">{errors.sender.phone.message}</p>}
+            <div className="sm:col-span-2">
+              <Controller
+                name="sender.phone"
+                control={control}
+                render={({ field }) => (
+                  <PhoneField
+                    label="Phone *"
+                    value={field.value}
+                    onChange={field.onChange}
+                    error={errors.sender?.phone?.message}
+                    id="edit-sender-phone"
+                  />
+                )}
+              />
             </div>
             <div>
               <label className="label">Social ID (@handle)</label>
@@ -222,10 +233,20 @@ export default function EditOrder() {
               <input className="input" {...register('receiver.name')} />
               {errors.receiver?.name && <p className="text-red-500 text-xs mt-1">{errors.receiver.name.message}</p>}
             </div>
-            <div>
-              <label className="label">Receiver Phone *</label>
-              <input className="input" {...register('receiver.phone')} />
-              {errors.receiver?.phone && <p className="text-red-500 text-xs mt-1">{errors.receiver.phone.message}</p>}
+            <div className="sm:col-span-2">
+              <Controller
+                name="receiver.phone"
+                control={control}
+                render={({ field }) => (
+                  <PhoneField
+                    label="Receiver Phone *"
+                    value={field.value}
+                    onChange={field.onChange}
+                    error={errors.receiver?.phone?.message}
+                    id="edit-receiver-phone"
+                  />
+                )}
+              />
             </div>
             <div>
               <label className="label">City *</label>

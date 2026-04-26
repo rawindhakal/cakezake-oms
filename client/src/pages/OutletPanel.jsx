@@ -19,7 +19,7 @@ function OutletSelect({ outlets, onSelect }) {
         <p className="text-gray-500 text-sm mt-1">Select your outlet to continue</p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-xl">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 w-full max-w-5xl max-h-[min(75vh,32rem)] overflow-y-auto pr-1">
         {outlets.filter((o) => o.isActive).map((outlet) => (
           <button
             key={outlet._id}
@@ -294,6 +294,21 @@ const ITEM_STATUS_STYLES = {
 const ITEM_STATUS_NEXT = { Pending: 'Preparing', Preparing: 'Prepared', Prepared: 'Pending' };
 const ITEM_STATUS_ICON = { Pending: '○', Preparing: '◑', Prepared: '●' };
 
+function normalizeItemCategory(item) {
+  return String(item?.category ?? '').trim().toLowerCase();
+}
+
+function isCakeItem(item) {
+  return normalizeItemCategory(item) === 'cake';
+}
+
+/** Reference photos: current field + legacy `imageUrls` if present in older documents */
+function itemReferenceImageUrls(item) {
+  const a = Array.isArray(item.referenceImages) ? item.referenceImages : [];
+  const b = Array.isArray(item.imageUrls) ? item.imageUrls : [];
+  return [...a, ...b];
+}
+
 // ─── Completed Photo Modal ─────────────────────────────────────────────────────
 
 function CompletedPhotoModal({ item, orderId, onSuccess, onCancel }) {
@@ -509,8 +524,8 @@ function ItemBlock({ item, onItemStatusChange, onMarkPrepared, orderId }) {
         {/* Details grid */}
         {details.length > 0 && (
           <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-            {details.map(([label, value]) => (
-              <div key={label}>
+            {details.map(([label, value], di) => (
+              <div key={`${label}-${di}`}>
                 <span className="text-xs text-gray-400">{label}</span>
                 <p className="text-sm font-medium text-gray-700">{value}</p>
               </div>
@@ -549,7 +564,7 @@ function ItemBlock({ item, onItemStatusChange, onMarkPrepared, orderId }) {
 
         {/* Reference images */}
         <ImageStrip
-          images={item.referenceImages}
+          images={itemReferenceImageUrls(item)}
           label="Reference Images"
           labelClass="text-gray-400"
           thumbBorder="border-white"
@@ -589,8 +604,8 @@ function OrderCard({ order: initialOrder, areaFilter, onOrderUpdate }) {
   useEffect(() => { setOrder(initialOrder); }, [initialOrder]);
 
   const items = areaFilter === 'kitchen'
-    ? order.items.filter((i) => i.category === 'Cake')
-    : order.items.filter((i) => i.category !== 'Cake');
+    ? order.items.filter(isCakeItem)
+    : order.items.filter((i) => !isCakeItem(i));
 
   if (items.length === 0) return null;
 
@@ -683,9 +698,9 @@ function OrderCard({ order: initialOrder, areaFilter, onOrderUpdate }) {
 
           {/* ── Item Blocks ── */}
           <div className="space-y-3">
-            {items.map((item) => (
+            {items.map((item, ii) => (
               <ItemBlock
-                key={item._id}
+                key={item._id ? String(item._id) : `item-${order._id}-${ii}`}
                 item={item}
                 orderId={order._id}
                 onItemStatusChange={handleItemStatusChange}
@@ -763,9 +778,8 @@ function OrderBoard({ outlet, onLogout }) {
   }
 
   // Orders that have cake items
-  const kitchenOrders = orders.filter((o) => o.items.some((i) => i.category === 'Cake'));
-  // Orders that have non-cake items
-  const prepOrders    = orders.filter((o) => o.items.some((i) => i.category !== 'Cake'));
+  const kitchenOrders = orders.filter((o) => o.items.some(isCakeItem));
+  const prepOrders    = orders.filter((o) => o.items.some((i) => !isCakeItem(i)));
 
   const activeOrders  = orders.filter((o) => !['Delivered', 'Cancelled'].includes(o.status));
 
@@ -921,7 +935,7 @@ export default function OutletPanel() {
   const outlets = allOutlets.filter((o) => {
     if (!o.isActive) return false;
     if (user?.role === 'super_admin') return true;
-    return user?.assignedOutlets?.some((a) => (a._id || a) === o._id);
+    return user?.assignedOutlets?.some((a) => String(a._id || a) === String(o._id));
   });
 
   function handleSelectOutlet(outlet) {

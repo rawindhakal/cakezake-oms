@@ -22,6 +22,8 @@ const appSettingsRoutes = require('./routes/appSettings');
 const userRoutes        = require('./routes/users');
 const trackRoutes       = require('./routes/track');
 const socialRoutes      = require('./routes/social');
+const emailConfigRoutes = require('./routes/emailConfig');
+const smsConfigRoutes   = require('./routes/smsConfig');
 
 const app = express();
 
@@ -83,6 +85,8 @@ app.use('/api/app-settings', appSettingsRoutes);
 app.use('/api/users',        userRoutes);
 app.use('/api/track',        trackRoutes);
 app.use('/api/social',       socialRoutes);
+app.use('/api/email-config', emailConfigRoutes);
+app.use('/api/sms-config',   smsConfigRoutes);
 
 if (process.env.NODE_ENV === 'production') {
   const clientBuild = path.join(__dirname, '..', 'client', 'dist');

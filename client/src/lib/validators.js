@@ -1,11 +1,16 @@
 import { z } from 'zod';
 
-const phoneRegex = /^(97|98)\d{8}$/;
+/** Accepts full international digits (or legacy Nepal 10-digit 97/98…). */
+function isIntlPhone(s) {
+  let d = String(s || '').replace(/\D/g, '');
+  if (/^(97|98)\d{8}$/.test(d)) d = `977${d}`;
+  return d.length >= 10 && d.length <= 15;
+}
 
 export const orderSchema = z.object({
   sender: z.object({
     name:     z.string().min(1, 'Name required'),
-    phone:    z.string().regex(phoneRegex, 'Enter valid Nepal mobile (97/98XXXXXXXX)'),
+    phone:    z.string().refine(isIntlPhone, 'Enter a valid number with country code (10–15 digits)'),
     socialId: z.string().optional(),
     channel:  z.enum(['Instagram', 'Facebook', 'WhatsApp', 'Website', 'Walk-in', 'Phone Call']),
   }),
@@ -53,7 +58,7 @@ export const orderSchema = z.object({
   fulfillmentType: z.enum(['delivery', 'pickup']).default('delivery'),
   receiver: z.object({
     name:     z.string().min(1, 'Receiver name required'),
-    phone:    z.string().regex(phoneRegex, 'Enter valid Nepal mobile'),
+    phone:    z.string().refine(isIntlPhone, 'Enter a valid number with country code'),
     city:     z.string().optional(),
     landmark: z.string().optional(),
   }),
