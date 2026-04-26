@@ -1,7 +1,9 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const Order   = require('../models/Order');
 const Payment = require('../models/Payment');
 const requireAuth = require('../middleware/auth');
+const { normalizeOrderPhone } = require('../utils/phone');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -74,13 +76,19 @@ router.get('/', async (req, res) => {
 router.get('/:phone', async (req, res) => {
   try {
     const { phone } = req.params;
+    let phoneKey = phone;
+    try {
+      phoneKey = normalizeOrderPhone(phone);
+    } catch {
+      /* use raw param if not normalisable (legacy URLs) */
+    }
 
     const [orders, payments] = await Promise.all([
-      Order.find({ 'sender.phone': phone })
+      Order.find({ 'sender.phone': phoneKey })
         .select('orderNumber sender items payment receiver delivery status createdAt')
         .sort({ createdAt: -1 })
         .lean(),
-      Payment.find({ customerPhone: phone }).sort({ createdAt: -1 }),
+      Payment.find({ customerPhone: phoneKey }).sort({ createdAt: -1 }).lean(),
     ]);
 
     if (orders.length === 0 && payments.length === 0) {
@@ -91,7 +99,7 @@ router.get('/:phone', async (req, res) => {
     const latest = orders[0] || {};
     const profile = {
       name:    latest.sender?.name || payments[0]?.customerName,
-      phone,
+      phone:   phoneKey,
       socialId: latest.sender?.socialId || '',
       channel:  latest.sender?.channel || '',
     };
@@ -128,20 +136,36 @@ router.post('/:phone/payments', async (req, res) => {
     if (!amount || amount <= 0) {
       return res.status(400).json({ success: false, message: 'Amount must be positive' });
     }
+    if (!orderId || !mongoose.isValidObjectId(orderId)) {
+      return res.status(400).json({ success: false, message: 'A valid order is required' });
+    }
 
-    // Resolve customer name from latest order
-    const latestOrder = await Order.findOne({ 'sender.phone': phone }).sort({ createdAt: -1 });
-    if (!latestOrder) {
-      return res.status(404).json({ success: false, message: 'No orders found for this customer' });
+    let normCustomer;
+    try {
+      normCustomer = normalizeOrderPhone(phone);
+    } catch (e) {
+      return res.status(400).json({ success: false, message: e.message || 'Invalid phone' });
+    }
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+    if (order.isDeleted) {
+      return res.status(400).json({ success: false, message: 'Cannot record payment for a deleted order' });
+    }
+    if (order.sender.phone !== normCustomer) {
+      return res.status(403).json({ success: false, message: 'Order does not belong to this customer' });
     }
 
     const payment = await Payment.create({
-      customerPhone: phone,
-      customerName:  latestOrder.sender.name,
+      customerPhone: order.sender.phone,
+      customerName:  order.sender.name,
       amount:        Number(amount),
       method:        method || undefined,
       note:          note   || undefined,
-      orderId:       orderId || undefined,
+      orderId:       order._id,
+      orderNumber:   order.orderNumber || '',
     });
 
     res.json({ success: true, payment });
@@ -153,6 +177,21 @@ router.post('/:phone/payments', async (req, res) => {
 // ─── DELETE /api/customers/:phone/payments/:id ────────────────────────────────
 router.delete('/:phone/payments/:id', async (req, res) => {
   try {
+    const doc = await Payment.findById(req.params.id);
+    if (!doc) return res.status(404).json({ success: false, message: 'Payment not found' });
+
+    let normUrl;
+    let normStored;
+    try {
+      normUrl = normalizeOrderPhone(req.params.phone);
+      normStored = normalizeOrderPhone(doc.customerPhone);
+    } catch {
+      return res.status(400).json({ success: false, message: 'Invalid phone' });
+    }
+    if (normUrl !== normStored) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+
     await Payment.findByIdAndDelete(req.params.id);
     res.json({ success: true });
   } catch (err) {

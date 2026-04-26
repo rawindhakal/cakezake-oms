@@ -39,13 +39,20 @@ function AddPaymentModal({ phone, orders, onClose, onAdded }) {
   const [orderId, setOrderId] = useState('');
   const [busy, setBusy]       = useState(false);
 
+  useEffect(() => {
+    if (orders.length === 0) return;
+    const withDue = orders.find((o) => (o.payment?.due || 0) > 0);
+    setOrderId(String((withDue || orders[0])._id));
+  }, [orders]);
+
   async function submit(e) {
     e.preventDefault();
     if (!amount || Number(amount) <= 0) { toast.error('Enter a valid amount'); return; }
+    if (!orderId || orders.length === 0) { toast.error('Select an order'); return; }
     setBusy(true);
     try {
       const { data } = await api.post(`/customers/${phone}/payments`, {
-        amount: Number(amount), method, note: note || undefined, orderId: orderId || undefined,
+        amount: Number(amount), method, note: note || undefined, orderId,
       });
       if (data.success) { toast.success('Payment recorded'); onAdded(data.payment); onClose(); }
     } catch { toast.error('Failed to record payment'); }
@@ -74,7 +81,7 @@ function AddPaymentModal({ phone, orders, onClose, onAdded }) {
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-semibold text-gray-500 mb-1">Method</label>
             <select value={method} onChange={(e) => setMethod(e.target.value)}
@@ -85,13 +92,22 @@ function AddPaymentModal({ phone, orders, onClose, onAdded }) {
             </select>
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1">Link to Order</label>
-            <select value={orderId} onChange={(e) => setOrderId(e.target.value)}
-              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-300">
-              <option value="">— General —</option>
-              {orders.map((o) => (
-                <option key={o._id} value={o._id}>{o.orderNumber}</option>
-              ))}
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Order *</label>
+            <select
+              value={orderId}
+              onChange={(e) => setOrderId(e.target.value)}
+              disabled={orders.length === 0}
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-300 disabled:opacity-50"
+            >
+              {orders.length === 0 ? (
+                <option value="">No orders for this customer</option>
+              ) : (
+                orders.map((o) => (
+                  <option key={o._id} value={o._id}>
+                    {o.orderNumber}{(o.payment?.due || 0) > 0 ? ` · ${npr(o.payment.due)} due` : ''}
+                  </option>
+                ))
+              )}
             </select>
           </div>
         </div>
@@ -292,13 +308,14 @@ function CustomerLedger() {
       delivery:o.delivery,
     })),
     ...payments.map((p) => ({
-      type:   'payment',
-      date:   p.createdAt,
-      id:     p._id,
-      amount: p.amount,
-      method: p.method,
-      note:   p.note,
-      orderId:p.orderId,
+      type:        'payment',
+      date:        p.createdAt,
+      id:          p._id,
+      amount:      p.amount,
+      method:      p.method,
+      note:        p.note,
+      orderId:     p.orderId,
+      orderNumber: p.orderNumber,
     })),
   ].sort((a, b) => new Date(b.date) - new Date(a.date));
 
@@ -329,8 +346,12 @@ function CustomerLedger() {
             {profile.socialId && <span className="text-brand-400">{profile.socialId}</span>}
           </div>
         </div>
-        <button onClick={() => setModal(true)}
-          className="flex items-center gap-2 bg-brand-500 hover:bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-colors flex-shrink-0">
+        <button
+          type="button"
+          onClick={() => orders.length && setModal(true)}
+          disabled={orders.length === 0}
+          title={orders.length === 0 ? 'No orders to attach a payment to' : 'Record a payment against an order'}
+          className="flex items-center gap-2 bg-brand-500 hover:bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-colors flex-shrink-0 disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-brand-500">
           <PlusCircle size={15} /> Record Payment
         </button>
       </div>
@@ -427,6 +448,12 @@ function CustomerLedger() {
                     {entry.method && <span className="text-xs bg-green-100 text-green-600 px-2 py-0.5 rounded-full">{entry.method}</span>}
                   </div>
                   <div className="flex items-center gap-3 text-xs text-gray-500 mt-0.5 flex-wrap">
+                    {entry.orderNumber && entry.orderId && (
+                      <Link to={`/orders/${entry.orderId}`} onClick={(e) => e.stopPropagation()}
+                        className="font-semibold text-brand-600 hover:underline">
+                        {entry.orderNumber}
+                      </Link>
+                    )}
                     <span>{dayjs(entry.date).format('DD MMM YYYY, h:mm A')}</span>
                     {entry.note && <span className="text-gray-600 italic">"{entry.note}"</span>}
                   </div>

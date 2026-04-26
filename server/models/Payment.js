@@ -6,7 +6,9 @@ const PaymentSchema = new mongoose.Schema({
   amount:        { type: Number, required: true },
   method:        { type: String, enum: ['Cash', 'eSewa', 'Khalti', 'Bank Transfer', 'QR'] },
   note:          { type: String },
-  orderId:       { type: mongoose.Schema.Types.ObjectId, ref: 'Order', default: null },
+  /** Set for all new payments via API; optional in schema for legacy rows */
+  orderId:       { type: mongoose.Schema.Types.ObjectId, ref: 'Order', index: true },
+  orderNumber:   { type: String, index: true },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Payment', PaymentSchema);

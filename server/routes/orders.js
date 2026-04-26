@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const { body, validationResult } = require('express-validator');
 const XLSX = require('xlsx');
 const Order = require('../models/Order');
+const Payment = require('../models/Payment');
 const User = require('../models/User');
 const requireAuth = require('../middleware/auth');
 const requireSuperAdmin = require('../middleware/requireSuperAdmin');
@@ -418,12 +419,15 @@ router.post('/:id/items/:itemId/complete-image', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      { isDeleted: true, deletedAt: new Date() },
-      { new: true },
-    );
+    const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+
+    await Payment.deleteMany({ orderId: order._id });
+
+    order.isDeleted = true;
+    order.deletedAt = new Date();
+    await order.save();
+
     res.json({ success: true, message: 'Order deleted' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
