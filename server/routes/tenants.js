@@ -96,10 +96,16 @@ router.delete('/switch-context', (req, res) => {
 // GET /api/tenants/analytics — platform-wide analytics
 router.get('/analytics', async (req, res) => {
   try {
-    const now = new Date();
+    const now         = new Date();
+    const todayStart  = new Date(now); todayStart.setHours(0, 0, 0, 0);
     const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const weekAgo     = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-    const [monthlyRevenue, tenantRevenue, recentActivity] = await Promise.all([
+    const [monthlyRevenue, tenantRevenue, recentActivity,
+           ordersTodayCount, revTodayAgg, newTenantsThisWeek,
+           ordersThisMonth, ordersLastMonth] = await Promise.all([
       // Monthly platform revenue + orders for last 6 months
       Order.aggregate([
         { $match: { isDeleted: { $ne: true }, status: { $ne: 'Cancelled' }, createdAt: { $gte: sixMonthsAgo } } },
@@ -125,8 +131,21 @@ router.get('/analytics', async (req, res) => {
         { $project: { tenantId: '$_id', tenantName: '$tenant.name', tenantSlug: '$tenant.slug', revenue: 1, orders: 1, due: 1, _id: 0 } },
         { $sort: { revenue: -1 } },
       ]),
-      // Recent audit activity (last 20 entries across all tenants)
-      AuditLog.find({}).sort({ createdAt: -1 }).limit(20).lean(),
+      // Recent audit activity
+      AuditLog.find({}).sort({ createdAt: -1 }).limit(8).lean(),
+      // Today's order count
+      Order.countDocuments({ isDeleted: { $ne: true }, createdAt: { $gte: todayStart } }),
+      // Today's revenue
+      Order.aggregate([
+        { $match: { isDeleted: { $ne: true }, createdAt: { $gte: todayStart } } },
+        { $group: { _id: null, total: { $sum: '$payment.total' } } },
+      ]),
+      // New tenants this week
+      Tenant.countDocuments({ createdAt: { $gte: weekAgo } }),
+      // Orders this month
+      Order.countDocuments({ isDeleted: { $ne: true }, createdAt: { $gte: thisMonthStart } }),
+      // Orders last month
+      Order.countDocuments({ isDeleted: { $ne: true }, createdAt: { $gte: lastMonthStart, $lt: thisMonthStart } }),
     ]);
 
     // Fill any missing months with zeros
@@ -139,7 +158,55 @@ router.get('/analytics', async (req, res) => {
       months.push({ month: key, label, revenue: found?.revenue || 0, orders: found?.orders || 0 });
     }
 
-    res.json({ success: true, monthlyRevenue: months, tenantRevenue, recentActivity });
+    const ordersGrowth = ordersLastMonth > 0
+      ? Math.round(((ordersThisMonth - ordersLastMonth) / ordersLastMonth) * 100)
+      : ordersThisMonth > 0 ? 100 : 0;
+
+    res.json({
+      success: true,
+      monthlyRevenue: months,
+      tenantRevenue,
+      recentActivity,
+      ordersToday:        ordersTodayCount,
+      revenueToday:       revTodayAgg[0]?.total || 0,
+      newTenantsThisWeek,
+      ordersThisMonth,
+      ordersLastMonth,
+      ordersGrowth,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET /api/tenants/activity — paginated, filterable audit log with tenant names
+router.get('/activity', async (req, res) => {
+  try {
+    const limit  = Math.min(parseInt(req.query.limit) || 30, 100);
+    const page   = Math.max(parseInt(req.query.page)  || 1, 1);
+    const filter = {};
+    if (req.query.tenantId && req.query.tenantId !== 'all') filter.tenantId = req.query.tenantId;
+    if (req.query.action   && req.query.action   !== 'all') filter.action   = req.query.action;
+
+    const [logs, total] = await Promise.all([
+      AuditLog.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      AuditLog.countDocuments(filter),
+    ]);
+
+    const tIds = [...new Set(logs.map((l) => l.tenantId?.toString()).filter(Boolean))];
+    const tenantMap = {};
+    if (tIds.length) {
+      const docs = await Tenant.find({ _id: { $in: tIds } }, 'name slug').lean();
+      docs.forEach((t) => { tenantMap[t._id.toString()] = t; });
+    }
+
+    const enriched = logs.map((l) => ({
+      ...l,
+      tenantName: l.tenantId ? (tenantMap[l.tenantId.toString()]?.name || null) : null,
+      tenantSlug: l.tenantId ? (tenantMap[l.tenantId.toString()]?.slug || null) : null,
+    }));
+
+    res.json({ success: true, logs: enriched, total, page, pages: Math.ceil(total / limit) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
