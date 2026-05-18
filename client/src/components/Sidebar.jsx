@@ -28,9 +28,10 @@ export default function Sidebar() {
     const interval = setInterval(fetchUnread, 30000);
     return () => clearInterval(interval);
   }, []);
-  const isSuperAdmin      = user?.role === 'super_admin';
-  const isRider           = user?.role === 'rider';
-  const isOrderProcessor  = user?.role === 'order_processor';
+
+  const isSuperAdmin     = user?.role === 'super_admin';
+  const isRider          = user?.role === 'rider';
+  const isOrderProcessor = user?.role === 'order_processor';
 
   async function handleLogout() {
     await logout();
@@ -45,9 +46,7 @@ export default function Sidebar() {
         end={to === '/orders'}
         className={({ isActive }) =>
           `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-            isActive
-              ? activeClass || 'bg-brand-50 text-brand-600'
-              : 'text-gray-600 hover:bg-gray-50'
+            isActive ? activeClass || 'bg-brand-50 text-brand-600' : 'text-gray-600 hover:bg-gray-50'
           }`
         }
       >
@@ -57,23 +56,26 @@ export default function Sidebar() {
     );
   }
 
+  // Determine the business name to show from the user's tenant context
+  // Fall back to "Order Manager" for generic display
+  const brandName = 'Order Manager';
+
   return (
     <aside className="w-56 bg-white border-r border-gray-100 flex flex-col h-full min-h-screen">
       <div className="p-5 border-b border-gray-100">
         <div className="flex items-center gap-2">
           <span className="text-2xl">🎂</span>
           <div>
-            <div className="font-bold text-brand-600 leading-tight">CakeZake</div>
-            <div className="text-xs text-gray-400">Order Manager</div>
+            <div className="font-bold text-brand-600 leading-tight">{brandName}</div>
+            <div className="text-xs text-gray-400">Orders</div>
           </div>
         </div>
       </div>
 
-      {/* User info pill */}
       {user && (
         <div className="mx-3 mt-3 px-3 py-2 bg-gray-50 rounded-lg">
           <p className="text-xs font-semibold text-gray-700 truncate">{user.name}</p>
-          <p className="text-xs text-gray-400 capitalize">{user.role.replace('_', ' ')}</p>
+          <p className="text-xs text-gray-400 capitalize">{user.role.replace(/_/g, ' ')}</p>
         </div>
       )}
 
@@ -88,7 +90,6 @@ export default function Sidebar() {
               <NavItem key={to} to={to} icon={icon} label={label} />
             ))}
 
-            {/* Inbox with unread badge */}
             <NavLink
               to="/inbox"
               className={({ isActive }) =>

@@ -9,6 +9,7 @@ const PaymentSchema = new mongoose.Schema({
   /** Set for all new payments via API; optional in schema for legacy rows */
   orderId:       { type: mongoose.Schema.Types.ObjectId, ref: 'Order', index: true },
   orderNumber:   { type: String, index: true },
+  tenantId:      { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Payment', PaymentSchema);

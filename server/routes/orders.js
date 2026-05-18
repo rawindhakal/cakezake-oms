@@ -1,27 +1,33 @@
-const express = require('express');
-const mongoose = require('mongoose');
+const express    = require('express');
+const mongoose   = require('mongoose');
 const { body, validationResult } = require('express-validator');
-const XLSX = require('xlsx');
-const Order = require('../models/Order');
-const Payment = require('../models/Payment');
-const User = require('../models/User');
+const XLSX       = require('xlsx');
+const Order      = require('../models/Order');
+const Payment    = require('../models/Payment');
+const Tenant     = require('../models/Tenant');
+const User       = require('../models/User');
 const requireAuth = require('../middleware/auth');
 const requireSuperAdmin = require('../middleware/requireSuperAdmin');
 const generateOrderNumber = require('../utils/orderNumber');
 const { sendOrderConfirmation, sendDeliveryReminder } = require('../utils/notify');
-const { sendNewOrderAlert } = require('../utils/email');
+const AuditLog = require('../models/AuditLog');
+const { sendNewOrderAlert, sendOrderStatusEmail } = require('../utils/email');
 const { bustStatsCache } = require('./stats');
 const { normalizeOrderPhone, isValidOrderPhone } = require('../utils/phone');
 
 const router = express.Router();
 router.use(requireAuth);
 
+function tenantScope(req, extra = {}) {
+  return req.tenantId ? { tenantId: req.tenantId, ...extra } : extra;
+}
+
 function parseOrderFromBackup(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const o = JSON.parse(JSON.stringify(raw));
   delete o.__v;
 
-  if (o.delivery?.date) o.delivery.date = new Date(o.delivery.date);
+  if (o.delivery?.date)    o.delivery.date    = new Date(o.delivery.date);
   if (o.delivery?.signedAt) o.delivery.signedAt = new Date(o.delivery.signedAt);
   if (o.createdAt) o.createdAt = new Date(o.createdAt);
   if (o.updatedAt) o.updatedAt = new Date(o.updatedAt);
@@ -85,16 +91,16 @@ router.get('/', async (req, res) => {
   try {
     const { status, city, channel, search, startDate, endDate, page = 1, limit = 20, archived } = req.query;
 
-    // archived=true → show deleted orders; otherwise exclude them
-    const filter = archived === 'true' ? { isDeleted: true } : { isDeleted: { $ne: true } };
+    const base   = archived === 'true' ? { isDeleted: true } : { isDeleted: { $ne: true } };
+    const filter = tenantScope(req, base);
 
-    if (status) filter.status = status;
-    if (city) filter['receiver.city'] = city;
-    if (channel) filter['sender.channel'] = channel;
+    if (status)  filter.status             = status;
+    if (city)    filter['receiver.city']   = city;
+    if (channel) filter['sender.channel']  = channel;
     if (search) {
       filter.$or = [
-        { orderNumber: { $regex: search, $options: 'i' } },
-        { 'sender.name': { $regex: search, $options: 'i' } },
+        { orderNumber:    { $regex: search, $options: 'i' } },
+        { 'sender.name':  { $regex: search, $options: 'i' } },
         { 'sender.phone': { $regex: search, $options: 'i' } },
       ];
     }
@@ -118,57 +124,49 @@ router.get('/', async (req, res) => {
       );
     }
     const [orders, total] = await Promise.all([listQuery.lean(), Order.countDocuments(filter)]);
-
     res.json({ success: true, orders, total, page: parseInt(page) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-/** Registered before /:id so "export" is not parsed as an ObjectId. */
+/** Export — registered before /:id */
 router.get('/export', async (req, res) => {
   try {
     const format = String(req.query.format || 'xlsx').toLowerCase();
 
     if (format === 'json') {
-      const orders = await Order.find({}).lean().sort({ createdAt: -1 });
+      const orders = await Order.find(tenantScope(req, {})).lean().sort({ createdAt: -1 });
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename=cakezake-backup-${new Date().toISOString().slice(0, 10)}.json`,
-      );
-      return res.json({
-        version: 1,
-        exportedAt: new Date().toISOString(),
-        orders,
-      });
+      res.setHeader('Content-Disposition', `attachment; filename=backup-${new Date().toISOString().slice(0, 10)}.json`);
+      return res.json({ version: 1, exportedAt: new Date().toISOString(), orders });
     }
 
-    const filter = { isDeleted: { $ne: true }, status: { $ne: 'Cancelled' } };
+    const filter = tenantScope(req, { isDeleted: { $ne: true }, status: { $ne: 'Cancelled' } });
     const orders = await Order.find(filter).sort({ createdAt: -1 }).lean();
-    const rows = orders.map((o) => {
-      const delivery = o.delivery || {};
-      const payment = o.payment || {};
-      const sender = o.sender || {};
-      const receiver = o.receiver || {};
+    const rows   = orders.map((o) => {
+      const d = o.delivery || {};
+      const p = o.payment  || {};
+      const s = o.sender   || {};
+      const r = o.receiver || {};
       const items = Array.isArray(o.items) ? o.items : [];
       return {
-        'Order#': o.orderNumber || '',
-        Date: delivery.date ? new Date(delivery.date).toLocaleDateString('en-IN') : '',
-        Sender: sender.name || '',
-        'Sender Phone': sender.phone || '',
-        Channel: sender.channel || '',
-        Items: items.map((i) => i.name).filter(Boolean).join(', '),
-        'Total (NPR)': payment.total ?? '',
-        'Advance (NPR)': payment.advance ?? '',
-        'Due (NPR)': payment.due ?? '',
-        Method: payment.method || '',
-        Receiver: receiver.name || '',
-        'Receiver Phone': receiver.phone || '',
-        City: receiver.city || '',
-        Slot: delivery.slot || '',
-        Status: o.status || '',
-        Note: o.note || '',
+        'Order#':         o.orderNumber || '',
+        Date:             d.date ? new Date(d.date).toLocaleDateString('en-IN') : '',
+        Sender:           s.name  || '',
+        'Sender Phone':   s.phone || '',
+        Channel:          s.channel || '',
+        Items:            items.map((i) => i.name).filter(Boolean).join(', '),
+        'Total':          p.total   ?? '',
+        'Advance':        p.advance ?? '',
+        'Due':            p.due     ?? '',
+        Method:           p.method  || '',
+        Receiver:         r.name    || '',
+        'Receiver Phone': r.phone   || '',
+        City:             r.city    || '',
+        Slot:             d.slot    || '',
+        Status:           o.status  || '',
+        Note:             o.note    || '',
       };
     });
 
@@ -176,8 +174,7 @@ router.get('/export', async (req, res) => {
     const ws = XLSX.utils.json_to_sheet(rows);
     XLSX.utils.book_append_sheet(wb, ws, 'Orders');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-
-    res.setHeader('Content-Disposition', 'attachment; filename=cakezake-orders.xlsx');
+    res.setHeader('Content-Disposition', 'attachment; filename=orders.xlsx');
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.send(buf);
   } catch (err) {
@@ -190,10 +187,7 @@ router.post('/backup/import', requireSuperAdmin, async (req, res) => {
     let list = req.body;
     if (list && !Array.isArray(list) && Array.isArray(list.orders)) list = list.orders;
     if (!Array.isArray(list) || list.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Body must be a JSON array of orders or { "orders": [...] }',
-      });
+      return res.status(400).json({ success: false, message: 'Body must be a JSON array of orders or { "orders": [...] }' });
     }
 
     let merged = 0;
@@ -201,10 +195,9 @@ router.post('/backup/import', requireSuperAdmin, async (req, res) => {
 
     for (let i = 0; i < list.length; i++) {
       const pair = backupImportFilterAndDoc(list[i]);
-      if (!pair) {
-        errors.push({ index: i, message: 'Missing _id or orderNumber' });
-        continue;
-      }
+      if (!pair) { errors.push({ index: i, message: 'Missing _id or orderNumber' }); continue; }
+      // Scope imported orders to current tenant
+      if (req.tenantId) pair.doc.tenantId = req.tenantId;
       try {
         await Order.replaceOne(pair.filter, pair.doc, { upsert: true });
         merged += 1;
@@ -214,12 +207,7 @@ router.post('/backup/import', requireSuperAdmin, async (req, res) => {
     }
 
     bustStatsCache();
-    res.json({
-      success: errors.length === 0 || merged > 0,
-      merged,
-      failed: errors.length,
-      errors: errors.slice(0, 50),
-    });
+    res.json({ success: errors.length === 0 || merged > 0, merged, failed: errors.length, errors: errors.slice(0, 50) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -227,7 +215,8 @@ router.post('/backup/import', requireSuperAdmin, async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id)
+    const filter = { _id: req.params.id, ...tenantScope(req) };
+    const order  = await Order.findOne(filter)
       .populate('outlet', 'name city kitchen prepArea')
       .populate('assignedRider', 'name username');
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
@@ -240,37 +229,49 @@ router.get('/:id', async (req, res) => {
 router.post('/', validateOrder, async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
-    }
+    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
-    const data = req.body;
-
-    // Recompute totals server-side
-    const total = data.items.reduce((sum, item) => sum + Number(item.price), 0);
+    const data    = req.body;
+    const total   = data.items.reduce((sum, item) => sum + Number(item.price), 0);
     const advance = Number(data.payment?.advance) || 0;
-    const due = total - advance;
+    const due     = total - advance;
 
-    const orderNumber = await generateOrderNumber();
+    // Get tenant's order prefix
+    let orderPrefix = 'CZ';
+    if (req.tenantId) {
+      const tenant = await Tenant.findById(req.tenantId, 'orderPrefix').lean();
+      if (tenant?.orderPrefix) orderPrefix = tenant.orderPrefix;
+    }
+    const orderNumber = await generateOrderNumber(req.tenantId, orderPrefix);
 
     const receiver = { ...data.receiver };
     if (data.fulfillmentType === 'pickup' && !(receiver.city && String(receiver.city).trim())) {
       receiver.city = 'Pickup';
     }
 
-    const senderNorm = { ...data.sender, phone: normalizeOrderPhone(data.sender.phone) };
-    const receiverNorm = { ...receiver, phone: normalizeOrderPhone(receiver.phone) };
+    const senderNorm   = { ...data.sender,   phone: normalizeOrderPhone(data.sender.phone) };
+    const receiverNorm = { ...receiver,       phone: normalizeOrderPhone(receiver.phone) };
 
     const order = await Order.create({
       ...data,
-      sender: senderNorm,
-      receiver: receiverNorm,
+      sender:      senderNorm,
+      receiver:    receiverNorm,
       orderNumber,
-      payment: { ...data.payment, total, advance, due },
+      payment:     { ...data.payment, total, advance, due },
+      tenantId:    req.tenantId,
     });
 
     bustStatsCache();
-    sendNewOrderAlert(order); // fire-and-forget
+    sendNewOrderAlert(order, req.tenantId);
+    AuditLog.create({
+      tenantId: req.tenantId,
+      userId:   req.user?._id,
+      userName: req.user?.name || req.user?.username,
+      action:   'order.created',
+      entityType: 'order',
+      entityId: order._id,
+      meta: { orderNumber: order.orderNumber, total: order.payment?.total },
+    }).catch(() => {});
     res.status(201).json({ success: true, order });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -279,34 +280,26 @@ router.post('/', validateOrder, async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
-    const data = req.body;
+    const data   = req.body;
 
     if (data.sender?.phone != null) {
-      try {
-        data.sender = { ...data.sender, phone: normalizeOrderPhone(data.sender.phone) };
-      } catch (e) {
-        return res.status(400).json({ success: false, message: e.message });
-      }
+      try { data.sender = { ...data.sender, phone: normalizeOrderPhone(data.sender.phone) }; }
+      catch (e) { return res.status(400).json({ success: false, message: e.message }); }
     }
     if (data.receiver?.phone != null) {
-      try {
-        data.receiver = { ...data.receiver, phone: normalizeOrderPhone(data.receiver.phone) };
-      } catch (e) {
-        return res.status(400).json({ success: false, message: e.message });
-      }
+      try { data.receiver = { ...data.receiver, phone: normalizeOrderPhone(data.receiver.phone) }; }
+      catch (e) { return res.status(400).json({ success: false, message: e.message }); }
     }
 
     if (data.items?.length) {
-      const total = data.items.reduce((sum, item) => sum + Number(item.price), 0);
+      const total   = data.items.reduce((sum, item) => sum + Number(item.price), 0);
       const advance = Number(data.payment?.advance) || 0;
-      data.payment = { ...data.payment, total, advance, due: total - advance };
+      data.payment  = { ...data.payment, total, advance, due: total - advance };
     }
 
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      { ...data, updatedAt: Date.now() },
-      { new: true, runValidators: true }
-    ).populate('outlet', 'name city kitchen prepArea');
+    const filter = { _id: req.params.id, ...tenantScope(req) };
+    const order  = await Order.findOneAndUpdate(filter, { ...data, updatedAt: Date.now() }, { new: true, runValidators: true })
+      .populate('outlet', 'name city kitchen prepArea');
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
     bustStatsCache();
     res.json({ success: true, order });
@@ -318,12 +311,21 @@ router.put('/:id', async (req, res) => {
 router.patch('/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
-    const validStatuses = ['New', 'Confirmed', 'In Production', 'Out for Delivery', 'Delivered', 'Cancelled'];
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({ success: false, message: 'Invalid status' });
-    }
-    const order = await Order.findByIdAndUpdate(req.params.id, { status }, { new: true });
+    const valid = ['New', 'Confirmed', 'In Production', 'Out for Delivery', 'Delivered', 'Cancelled'];
+    if (!valid.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' });
+    const filter = { _id: req.params.id, ...tenantScope(req) };
+    const order  = await Order.findOneAndUpdate(filter, { status }, { new: true });
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+    AuditLog.create({
+      tenantId: req.tenantId,
+      userId:   req.user?._id,
+      userName: req.user?.name || req.user?.username,
+      action:   'order.status_changed',
+      entityType: 'order',
+      entityId: order._id,
+      meta: { orderNumber: order.orderNumber, newStatus: status },
+    }).catch(() => {});
+    sendOrderStatusEmail(order, status, req.tenantId);
     res.json({ success: true, order });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -334,11 +336,9 @@ router.patch('/:id/items/:itemId/status', async (req, res) => {
   try {
     const { itemStatus } = req.body;
     const valid = ['Pending', 'Preparing', 'Prepared'];
-    if (!valid.includes(itemStatus)) {
-      return res.status(400).json({ success: false, message: 'Invalid item status' });
-    }
+    if (!valid.includes(itemStatus)) return res.status(400).json({ success: false, message: 'Invalid item status' });
     const order = await Order.findOneAndUpdate(
-      { _id: req.params.id, 'items._id': req.params.itemId },
+      { _id: req.params.id, 'items._id': req.params.itemId, ...tenantScope(req) },
       { $set: { 'items.$.itemStatus': itemStatus } },
       { new: true }
     ).populate('outlet', 'name city kitchen prepArea');
@@ -349,7 +349,6 @@ router.patch('/:id/items/:itemId/status', async (req, res) => {
   }
 });
 
-// Assign a delivery rider to an order
 router.patch('/:id/assign-rider', async (req, res) => {
   try {
     let { riderId } = req.body;
@@ -361,11 +360,9 @@ router.patch('/:id/assign-rider', async (req, res) => {
       const rider = await User.findOne({ _id: riderId, role: 'rider', isActive: true });
       if (!rider) return res.status(400).json({ success: false, message: 'Rider not found or inactive' });
     }
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      { assignedRider: riderId || null },
-      { new: true }
-    ).populate('assignedRider', 'name username');
+    const filter = { _id: req.params.id, ...tenantScope(req) };
+    const order  = await Order.findOneAndUpdate(filter, { assignedRider: riderId || null }, { new: true })
+      .populate('assignedRider', 'name username');
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
     res.json({ success: true, order });
   } catch (err) {
@@ -373,19 +370,14 @@ router.patch('/:id/assign-rider', async (req, res) => {
   }
 });
 
-// Rider collects signature and marks order as Delivered
 router.post('/:id/sign-delivery', async (req, res) => {
   try {
     const { signature, receiverConfirmName } = req.body;
     if (!signature) return res.status(400).json({ success: false, message: 'Signature required' });
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      {
-        status: 'Delivered',
-        'delivery.signature':           signature,
-        'delivery.signedAt':            new Date(),
-        'delivery.receiverConfirmName': receiverConfirmName || '',
-      },
+    const filter = { _id: req.params.id, ...tenantScope(req) };
+    const order  = await Order.findOneAndUpdate(
+      filter,
+      { status: 'Delivered', 'delivery.signature': signature, 'delivery.signedAt': new Date(), 'delivery.receiverConfirmName': receiverConfirmName || '' },
       { new: true }
     ).populate('assignedRider', 'name username').populate('outlet', 'name city');
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
@@ -395,19 +387,13 @@ router.post('/:id/sign-delivery', async (req, res) => {
   }
 });
 
-// Mark item as Prepared and attach a completed product photo
 router.post('/:id/items/:itemId/complete-image', async (req, res) => {
   try {
     const { url } = req.body;
-    if (!url || typeof url !== 'string') {
-      return res.status(400).json({ success: false, message: 'Image URL required' });
-    }
+    if (!url || typeof url !== 'string') return res.status(400).json({ success: false, message: 'Image URL required' });
     const order = await Order.findOneAndUpdate(
-      { _id: req.params.id, 'items._id': req.params.itemId },
-      {
-        $set:  { 'items.$.itemStatus': 'Prepared' },
-        $push: { 'items.$.completedImages': url },
-      },
+      { _id: req.params.id, 'items._id': req.params.itemId, ...tenantScope(req) },
+      { $set: { 'items.$.itemStatus': 'Prepared' }, $push: { 'items.$.completedImages': url } },
       { new: true }
     ).populate('outlet', 'name city kitchen prepArea');
     if (!order) return res.status(404).json({ success: false, message: 'Item not found' });
@@ -419,15 +405,23 @@ router.post('/:id/items/:itemId/complete-image', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id);
+    const filter = { _id: req.params.id, ...tenantScope(req) };
+    const order  = await Order.findOne(filter);
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
 
+    AuditLog.create({
+      tenantId: req.tenantId,
+      userId:   req.user?._id,
+      userName: req.user?.name || req.user?.username,
+      action:   'order.deleted',
+      entityType: 'order',
+      entityId: req.params.id,
+      meta: { orderNumber: order?.orderNumber },
+    }).catch(() => {});
     await Payment.deleteMany({ orderId: order._id });
-
     order.isDeleted = true;
     order.deletedAt = new Date();
     await order.save();
-
     res.json({ success: true, message: 'Order deleted' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -436,11 +430,8 @@ router.delete('/:id', async (req, res) => {
 
 router.patch('/:id/restore', async (req, res) => {
   try {
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      { isDeleted: false, $unset: { deletedAt: '' } },
-      { new: true },
-    );
+    const filter = { _id: req.params.id, ...tenantScope(req) };
+    const order  = await Order.findOneAndUpdate(filter, { isDeleted: false, $unset: { deletedAt: '' } }, { new: true });
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
     res.json({ success: true, order });
   } catch (err) {
@@ -450,9 +441,9 @@ router.patch('/:id/restore', async (req, res) => {
 
 router.post('/:id/notify', async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id);
+    const order = await Order.findOne({ _id: req.params.id, ...tenantScope(req) });
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
-    await sendOrderConfirmation(order);
+    await sendOrderConfirmation(order, req.tenantId);
     res.json({ success: true, message: 'SMS sent' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -461,9 +452,9 @@ router.post('/:id/notify', async (req, res) => {
 
 router.post('/:id/remind', async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id);
+    const order = await Order.findOne({ _id: req.params.id, ...tenantScope(req) });
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
-    await sendDeliveryReminder(order);
+    await sendDeliveryReminder(order, req.tenantId);
     res.json({ success: true, message: 'Reminder sent' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

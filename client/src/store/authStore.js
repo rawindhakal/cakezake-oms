@@ -3,7 +3,7 @@ import api from '../lib/api';
 
 const useAuthStore = create((set) => ({
   authenticated: false,
-  user: null, // { id, username, name, role, assignedOutlets }
+  user: null, // { id, username, name, email, role, tenantId, assignedOutlets }
   loading: true,
 
   verify: async () => {
@@ -24,6 +24,19 @@ const useAuthStore = create((set) => ({
   logout: async () => {
     await api.post('/auth/logout');
     set({ authenticated: false, user: null });
+  },
+
+  switchTenant: async (tenantId) => {
+    const { data } = await api.post('/tenants/switch-context', { tenantId });
+    if (data.success) {
+      set((state) => ({ user: { ...state.user, viewingTenant: data.viewingTenant } }));
+    }
+    return data;
+  },
+
+  clearTenantView: async () => {
+    await api.delete('/tenants/switch-context');
+    set((state) => ({ user: { ...state.user, viewingTenant: null } }));
   },
 }));
 

@@ -1,8 +1,8 @@
-const express = require('express');
-const bcrypt = require('bcrypt');
+const express   = require('express');
+const bcrypt    = require('bcrypt');
 const rateLimit = require('express-rate-limit');
 const requireAuth = require('../middleware/auth');
-const User = require('../models/User');
+const User      = require('../models/User');
 
 const router = express.Router();
 
@@ -15,37 +15,55 @@ const loginLimiter = rateLimit({
   validate: { xForwardedForHeader: false },
 });
 
+async function buildUserPayload(user, session) {
+  const base = {
+    id:              user._id,
+    username:        user.username,
+    name:            user.name,
+    email:           user.email || null,
+    role:            user.role,
+    tenantId:        user.tenantId || null,
+    assignedOutlets: user.assignedOutlets || [],
+    viewingTenant:   null,
+  };
+
+  // Attach the tenant the platform owner is currently viewing
+  if (user.role === 'platform_owner' && session?.viewAsTenantId) {
+    try {
+      const Tenant = require('../models/Tenant');
+      const tenant = await Tenant.findById(session.viewAsTenantId, 'name slug currency orderPrefix isActive').lean();
+      if (tenant && tenant.isActive) base.viewingTenant = tenant;
+      else session.viewAsTenantId = null; // stale/inactive — clear it
+    } catch { /* ignore */ }
+  }
+
+  return base;
+}
+
 router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) {
-      return res.status(400).json({ success: false, message: 'Username and password required' });
+      return res.status(400).json({ success: false, message: 'Username/email and password required' });
     }
 
-    const user = await User.findOne({ username: username.trim().toLowerCase() }).populate('assignedOutlets', '_id name city');
-    if (!user) {
-      return res.status(401).json({ success: false, message: 'Invalid username or password' });
-    }
-    if (!user.isActive) {
-      return res.status(403).json({ success: false, message: 'Account is disabled' });
-    }
+    const loginKey = username.trim().toLowerCase();
+    const user = await User.findOne({
+      $or: [{ username: loginKey }, { email: loginKey }],
+    }).populate('assignedOutlets', '_id name city');
+
+    if (!user) return res.status(401).json({ success: false, message: 'Invalid credentials' });
+    if (!user.isActive) return res.status(403).json({ success: false, message: 'Account is disabled' });
 
     const match = await bcrypt.compare(password, user.password);
-    if (!match) {
-      return res.status(401).json({ success: false, message: 'Invalid username or password' });
-    }
+    if (!match) return res.status(401).json({ success: false, message: 'Invalid credentials' });
 
     req.session.userId = user._id.toString();
-    res.json({
-      success: true,
-      user: {
-        id:              user._id,
-        username:        user.username,
-        name:            user.name,
-        role:            user.role,
-        assignedOutlets: user.assignedOutlets,
-      },
-    });
+    // Clear any previous tenant-view context on fresh login
+    req.session.viewAsTenantId = null;
+
+    const payload = await buildUserPayload(user, req.session);
+    res.json({ success: true, user: payload });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -65,16 +83,8 @@ router.get('/verify', async (req, res) => {
   try {
     const user = await User.findById(req.session.userId).populate('assignedOutlets', '_id name city');
     if (!user || !user.isActive) return res.json({ authenticated: false });
-    res.json({
-      authenticated: true,
-      user: {
-        id:              user._id,
-        username:        user.username,
-        name:            user.name,
-        role:            user.role,
-        assignedOutlets: user.assignedOutlets,
-      },
-    });
+    const payload = await buildUserPayload(user, req.session);
+    res.json({ authenticated: true, user: payload });
   } catch {
     res.json({ authenticated: false });
   }
@@ -88,9 +98,7 @@ router.post('/change-password', requireAuth, async (req, res) => {
     }
 
     const match = await bcrypt.compare(currentPassword, req.user.password);
-    if (!match) {
-      return res.status(401).json({ success: false, message: 'Current password is wrong' });
-    }
+    if (!match) return res.status(401).json({ success: false, message: 'Current password is wrong' });
 
     const hash = await bcrypt.hash(newPassword, 10);
     await User.findByIdAndUpdate(req.user._id, { password: hash });

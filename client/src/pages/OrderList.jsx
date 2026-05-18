@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Plus, CalendarDays, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, Plus, CalendarDays, X, ChevronLeft, ChevronRight, Download } from 'lucide-react';
+import toast from 'react-hot-toast';
 import useOrderStore from '../store/orderStore';
 import StatusBadge from '../components/StatusBadge';
 import Spinner from '../components/Spinner';
+import api from '../lib/api';
 import dayjs from 'dayjs';
 
 const PAGE_SIZE = 20;
@@ -41,8 +43,37 @@ export default function OrderList() {
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd]     = useState('');
   const [page, setPage]             = useState(1);
+  const [exporting, setExporting]   = useState(false);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const params = { format: 'xlsx' };
+      if (statusTab !== 'All') params.status = statusTab;
+      if (city)    params.city    = city;
+      if (channel) params.channel = channel;
+      if (search)  params.search  = search;
+      if (datePreset === 'custom') {
+        if (customStart) params.startDate = dayjs(customStart).startOf('day').toISOString();
+        if (customEnd)   params.endDate   = dayjs(customEnd).endOf('day').toISOString();
+      } else if (datePreset !== 'all') {
+        Object.assign(params, presetToDates(datePreset));
+      }
+      const res = await api.get('/orders/export', { params, responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a   = document.createElement('a');
+      a.href     = url;
+      a.download = `orders-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Export failed');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   function buildAndFetch(p) {
     const params = { page: p, limit: PAGE_SIZE };
@@ -82,6 +113,15 @@ export default function OrderList() {
               <X size={14} /> Clear filters
             </button>
           )}
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            title={hasActiveFilters ? 'Export filtered orders' : 'Export all orders'}
+            className="flex items-center gap-2 px-3 py-2 rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:border-gray-300 text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            <Download size={16} className={exporting ? 'animate-bounce' : ''} />
+            {exporting ? 'Exporting…' : 'Export'}
+          </button>
           <button onClick={() => navigate('/orders/new')} className="btn-primary flex items-center gap-2">
             <Plus size={18} /> New Order
           </button>

@@ -19,14 +19,15 @@ export default function Login() {
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!username.trim() || !password) { setError('Enter username and password'); return; }
+    if (!username.trim() || !password) { setError('Enter username/email and password'); return; }
     setError('');
     setLoading(true);
     try {
       const res = await login({ username: username.trim(), password });
       if (res.success) {
         const role = res.user?.role;
-        const dest = role === 'rider' ? '/delivery'
+        const dest = role === 'platform_owner'  ? '/superadmin'
+                   : role === 'rider'           ? '/delivery'
                    : role === 'order_processor' ? '/outlet-panel'
                    : from;
         navigate(dest, { replace: true });
@@ -43,11 +44,10 @@ export default function Login() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-brand-50 to-pink-50 flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
-        {/* Logo */}
         <div className="text-center mb-8">
           <div className="text-5xl mb-3">🎂</div>
-          <h1 className="text-2xl font-bold text-brand-600">CakeZake</h1>
-          <p className="text-sm text-gray-400 mt-1">Order Management</p>
+          <h1 className="text-2xl font-bold text-brand-600">Order Manager</h1>
+          <p className="text-sm text-gray-400 mt-1">Sign in to continue</p>
         </div>
 
         <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-lg p-8 space-y-5">
@@ -60,10 +60,10 @@ export default function Login() {
           )}
 
           <div>
-            <label className="label">Username</label>
+            <label className="label">Username or Email</label>
             <input
               className="input"
-              placeholder="username"
+              placeholder="username or email"
               autoCapitalize="none"
               autoCorrect="off"
               value={username}
@@ -106,7 +106,7 @@ export default function Login() {
           </button>
         </form>
 
-        <p className="text-center text-xs text-gray-300 mt-6">CakeZake · Birtamode-5, Jhapa, Nepal</p>
+        <p className="text-center text-xs text-gray-300 mt-6">Powered by OrderPlatform</p>
       </div>
     </div>
   );

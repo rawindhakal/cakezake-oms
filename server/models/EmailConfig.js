@@ -11,6 +11,7 @@ const EmailConfigSchema = new mongoose.Schema({
   secure:     { type: Boolean, default: false }, // true = SSL/465, false = TLS/587
   user:       { type: String, default: '' },
   pass:       { type: String, default: '' },     // stored as-is (no extra encryption)
+  tenantId:   { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
 }, { timestamps: true });
 
 module.exports = mongoose.model('EmailConfig', EmailConfigSchema);

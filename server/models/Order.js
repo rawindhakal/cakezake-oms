@@ -97,6 +97,7 @@ const OrderSchema = new mongoose.Schema({
   },
 
   outlet:    { type: mongoose.Schema.Types.ObjectId, ref: 'Outlet', default: null },
+  tenantId:  { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
 
   note:      { type: String },
   createdBy: { type: String, default: 'admin' },

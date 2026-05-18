@@ -6,10 +6,14 @@ const requireAuth = require('../middleware/auth');
 const router = express.Router();
 router.use(requireAuth);
 
+function tenantFilter(req) {
+  return req.tenantId ? { tenantId: req.tenantId } : { tenantId: { $exists: false } };
+}
+
 // GET /api/email-config
 router.get('/', async (req, res) => {
   try {
-    let cfg = await EmailConfig.findOne().lean();
+    let cfg = await EmailConfig.findOne(tenantFilter(req)).lean();
     if (!cfg) cfg = {};
     const { pass: _p, __v: _v, ...safe } = cfg;
     safe.hasPass = !!cfg.pass;
@@ -32,10 +36,15 @@ router.put('/', async (req, res) => {
       port:       Number(port) || 587,
       secure:     !!secure,
       user:       user       || '',
+      tenantId:   req.tenantId || undefined,
     };
     if (pass && pass.trim()) update.pass = pass.trim();
 
-    const cfg = await EmailConfig.findOneAndUpdate({}, { $set: update }, { new: true, upsert: true }).lean();
+    const cfg = await EmailConfig.findOneAndUpdate(
+      tenantFilter(req),
+      { $set: update },
+      { new: true, upsert: true }
+    ).lean();
     const { pass: _p, __v: _v, ...safe } = cfg;
     safe.hasPass = !!cfg.pass;
     res.json({ success: true, config: safe });
@@ -45,23 +54,21 @@ router.put('/', async (req, res) => {
 });
 
 // POST /api/email-config/test
-// If no password sent, falls back to the stored DB config
 router.post('/test', async (req, res) => {
   try {
     let { host, port, secure, user, pass, fromName, fromEmail, adminEmail } = req.body;
 
-    // If password not provided, load from stored config
     if (!pass || !pass.trim()) {
-      const stored = await EmailConfig.findOne().lean();
+      const stored = await EmailConfig.findOne(tenantFilter(req)).lean();
       if (!stored?.pass) {
         return res.status(400).json({ success: false, message: 'No password saved yet. Enter and save your settings first.' });
       }
-      pass     = stored.pass;
-      host     = host     || stored.host;
-      port     = port     || stored.port;
-      secure   = secure   !== undefined ? secure : stored.secure;
-      user     = user     || stored.user;
-      fromName = fromName || stored.fromName;
+      pass      = stored.pass;
+      host      = host      || stored.host;
+      port      = port      || stored.port;
+      secure    = secure    !== undefined ? secure : stored.secure;
+      user      = user      || stored.user;
+      fromName  = fromName  || stored.fromName;
       fromEmail = fromEmail || stored.fromEmail;
       adminEmail = adminEmail || stored.adminEmail;
     }

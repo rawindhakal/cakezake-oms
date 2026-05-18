@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ShoppingBag, DollarSign, Clock, AlertCircle, TrendingUp, Wallet,
-  Package, ChevronDown, CalendarDays, Store, MapPin, Zap,
+  Package, ChevronDown, CalendarDays, Store, MapPin, Zap, Activity,
 } from 'lucide-react';
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
@@ -10,8 +10,11 @@ import {
 } from 'recharts';
 import api from '../lib/api';
 import dayjs from 'dayjs';
+import relativeTime from 'dayjs/plugin/relativeTime';
 import StatusBadge from '../components/StatusBadge';
 import Spinner from '../components/Spinner';
+
+dayjs.extend(relativeTime);
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -164,6 +167,7 @@ export default function Dashboard() {
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [chartsLoading, setChartsLoading]   = useState(true);
   const [onThisDay, setOnThisDay]   = useState([]);
+  const [activity, setActivity]     = useState([]);
   const [preset, setPreset]         = useState('30d');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd]     = useState('');
@@ -218,6 +222,9 @@ export default function Dashboard() {
   useEffect(() => {
     api.get('/stats/on-this-day')
       .then(({ data: res }) => { if (res.success) setOnThisDay(res.data || []); })
+      .catch(() => {});
+    api.get('/activity?limit=8')
+      .then(({ data: res }) => { if (res.success) setActivity(res.logs || []); })
       .catch(() => {});
   }, []);
 
@@ -553,6 +560,34 @@ export default function Dashboard() {
                         </div>
                       ))}
                     </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Activity Feed */}
+          {activity.length > 0 && (
+            <div>
+              <SectionTitle>Recent Activity</SectionTitle>
+              <div className="card divide-y divide-gray-50">
+                {activity.map((log) => (
+                  <div key={log._id} className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0">
+                    <div className={`w-2 h-2 rounded-full shrink-0 ${
+                      log.action === 'order.created' ? 'bg-green-400' :
+                      log.action === 'order.status_changed' ? 'bg-blue-400' :
+                      log.action === 'order.deleted' ? 'bg-red-400' : 'bg-gray-300'
+                    }`} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-gray-700">
+                        <span className="font-medium">{log.userName || 'System'}</span>
+                        {' '}
+                        {log.action === 'order.created' && <>created order <span className="font-mono text-xs bg-gray-100 px-1 py-0.5 rounded">{log.meta?.orderNumber}</span></>}
+                        {log.action === 'order.status_changed' && <>changed <span className="font-mono text-xs bg-gray-100 px-1 py-0.5 rounded">{log.meta?.orderNumber}</span> to <strong>{log.meta?.newStatus}</strong></>}
+                        {log.action === 'order.deleted' && <>cancelled order <span className="font-mono text-xs bg-gray-100 px-1 py-0.5 rounded">{log.meta?.orderNumber}</span></>}
+                      </p>
+                    </div>
+                    <p className="text-xs text-gray-400 shrink-0">{dayjs(log.createdAt).fromNow()}</p>
                   </div>
                 ))}
               </div>

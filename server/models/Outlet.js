@@ -5,7 +5,8 @@ const OutletSchema = new mongoose.Schema({
   city:     { type: String, required: true },
   address:  { type: String },
   phone:    { type: String },
-  isActive: { type: Boolean, default: true },
+  isActive:  { type: Boolean, default: true },
+  tenantId:  { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', index: true },
 
   kitchen: {
     label:       { type: String, default: 'Kitchen' },

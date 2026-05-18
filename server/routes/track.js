@@ -60,8 +60,8 @@ router.get('/', trackLimiter, async (req, res) => {
   try {
     let filter;
 
-    // Looks like an order number
-    if (/^CZ-/i.test(query)) {
+    // Looks like an order number (any prefix: CZ-2025-0001, PZ-2025-0001, etc.)
+    if (/^[A-Z]+-\d{4}-\d{4,}$/i.test(query)) {
       filter = { orderNumber: { $regex: `^${query}$`, $options: 'i' }, isDeleted: { $ne: true } };
     } else if (/^\d{7,10}$/.test(query)) {
       // Phone number search
