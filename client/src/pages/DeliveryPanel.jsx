@@ -245,7 +245,7 @@ function DeliveryOrderDetail({ order: initialOrder, onBack, onDelivered }) {
               {order.delivery.receiverConfirmName && (
                 <p className="text-sm text-gray-600 mb-2">Signed by: <strong>{order.delivery.receiverConfirmName}</strong></p>
               )}
-              <img src={order.delivery.signature} alt="signature" className="border border-gray-200 rounded-lg max-w-xs bg-gray-50" />
+              <img src={order.delivery.signature} alt="signature" className="border border-gray-200 rounded-lg max-w-xs bg-gray-50" onError={(e) => { e.target.onerror = null; e.target.style.display = 'none'; }} />
               <p className="text-xs text-gray-400 mt-2">{dayjs(order.delivery.signedAt).format('DD MMM YYYY, h:mm A')}</p>
             </div>
           )}

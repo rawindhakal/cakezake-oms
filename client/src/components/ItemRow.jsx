@@ -119,6 +119,7 @@ function ReferenceImageUpload({ index, control }) {
               src={url.includes('cloudinary.com') ? url.replace('/upload/', '/upload/w_120,h_120,c_fill/') : url}
               alt=""
               className="w-16 h-16 object-cover rounded-lg border border-gray-200"
+              onError={(e) => { e.target.onerror = null; e.target.style.display = 'none'; }}
             />
             <button type="button" onClick={() => remove(i)}
               className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity">

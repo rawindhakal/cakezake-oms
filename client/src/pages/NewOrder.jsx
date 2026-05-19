@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { orderSchema } from '../lib/validators';
 import useOrderStore from '../store/orderStore';
 import useOutletStore from '../store/outletStore';
+import useAuthStore from '../store/authStore';
 import useSettingsStore from '../store/settingsStore';
 import ItemRow from '../components/ItemRow';
 import DeliverySlotPicker from '../components/DeliverySlotPicker';
@@ -55,11 +56,20 @@ function OutletOption({ label, sublabel, selected, onClick, kitchen, prepArea })
 export default function NewOrder() {
   const navigate = useNavigate();
   const { createOrder } = useOrderStore();
-  const { outlets, loaded, fetchOutlets } = useOutletStore();
+  const { outlets, loaded, loadedForTenant, fetchOutlets } = useOutletStore();
   const { fetchSettings, getValues } = useSettingsStore();
+  const { user } = useAuthStore();
   const cities = getValues('delivery_cities', ['Birtamode', 'Damak', 'Dharan', 'Biratnagar', 'Itahari', 'Jhapa', 'Kathmandu', 'Other']);
 
-  useEffect(() => { if (!loaded) fetchOutlets(); fetchSettings(); }, []);
+  const effectiveTenantId = user?.viewingTenant?._id || user?.tenantId || null;
+
+  useEffect(() => {
+    // Reload outlets when tenant context changes (e.g. platform owner switching tenants)
+    if (!loaded || loadedForTenant !== effectiveTenantId) {
+      fetchOutlets(effectiveTenantId);
+    }
+    fetchSettings();
+  }, [effectiveTenantId]);
 
   const { register, control, handleSubmit, setValue, watch, formState: { errors, isSubmitting } } = useForm({
     resolver: zodResolver(orderSchema),

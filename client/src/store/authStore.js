@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import api from '../lib/api';
+import useOutletStore from './outletStore';
 
 const useAuthStore = create((set) => ({
   authenticated: false,
@@ -29,14 +30,16 @@ const useAuthStore = create((set) => ({
   switchTenant: async (tenantId) => {
     const { data } = await api.post('/tenants/switch-context', { tenantId });
     if (data.success) {
-      set((state) => ({ user: { ...state.user, viewingTenant: data.viewingTenant } }));
+      useOutletStore.getState().resetOutlets();
+      set((state) => ({ user: { ...state.user, viewingTenant: data.viewingTenant, tenant: data.viewingTenant } }));
     }
     return data;
   },
 
   clearTenantView: async () => {
     await api.delete('/tenants/switch-context');
-    set((state) => ({ user: { ...state.user, viewingTenant: null } }));
+    useOutletStore.getState().resetOutlets();
+    set((state) => ({ user: { ...state.user, viewingTenant: null, tenant: null } }));
   },
 }));
 

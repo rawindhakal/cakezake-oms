@@ -439,6 +439,76 @@ router.patch('/:id/restore', async (req, res) => {
   }
 });
 
+// Record a payment collection against an order's outstanding due.
+// Atomically updates payment.advance / payment.due and writes a Payment ledger entry.
+router.patch('/:id/collect', async (req, res) => {
+  try {
+    const { amount, method, note } = req.body;
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      return res.status(400).json({ success: false, message: 'Amount must be a positive number' });
+    }
+    const VALID_METHODS = ['Cash', 'eSewa', 'Khalti', 'Bank Transfer', 'QR'];
+    if (!VALID_METHODS.includes(method)) {
+      return res.status(400).json({ success: false, message: `Method must be one of: ${VALID_METHODS.join(', ')}` });
+    }
+
+    const filter = { _id: req.params.id, ...tenantScope(req) };
+    const order  = await Order.findOne(filter);
+    if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+
+    const currentDue = Number(order.payment.due) || 0;
+    if (currentDue <= 0) {
+      return res.status(400).json({ success: false, message: 'No outstanding due on this order' });
+    }
+    if (amt > currentDue + 0.01) {
+      return res.status(400).json({
+        success: false,
+        message: `Amount (${amt}) exceeds outstanding due (${currentDue})`,
+      });
+    }
+
+    // Clamp to exact due to avoid floating-point overshoot
+    const collected   = Math.min(amt, currentDue);
+    const newAdvance  = Number((order.payment.advance + collected).toFixed(2));
+    const newDue      = Number(Math.max(0, order.payment.total - newAdvance).toFixed(2));
+
+    const [updated] = await Promise.all([
+      Order.findOneAndUpdate(
+        filter,
+        { $set: { 'payment.advance': newAdvance, 'payment.due': newDue, updatedAt: Date.now() } },
+        { new: true }
+      ).populate('outlet', 'name city kitchen prepArea').populate('assignedRider', 'name username'),
+
+      Payment.create({
+        orderId:       order._id,
+        orderNumber:   order.orderNumber,
+        customerPhone: order.sender.phone,
+        customerName:  order.sender.name,
+        amount:        collected,
+        method,
+        note:          note || '',
+        tenantId:      req.tenantId,
+      }),
+    ]);
+
+    bustStatsCache();
+    AuditLog.create({
+      tenantId: req.tenantId,
+      userId:   req.user?._id,
+      userName: req.user?.name || req.user?.username,
+      action:   'order.payment_collected',
+      entityType: 'order',
+      entityId: order._id,
+      meta: { orderNumber: order.orderNumber, amount: collected, method, remainingDue: newDue },
+    }).catch(() => {});
+
+    res.json({ success: true, order: updated });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 router.post('/:id/notify', async (req, res) => {
   try {
     const order = await Order.findOne({ _id: req.params.id, ...tenantScope(req) });

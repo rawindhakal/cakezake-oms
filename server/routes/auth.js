@@ -16,6 +16,8 @@ const loginLimiter = rateLimit({
 });
 
 async function buildUserPayload(user, session) {
+  const Tenant = require('../models/Tenant');
+
   const base = {
     id:              user._id,
     username:        user.username,
@@ -25,15 +27,25 @@ async function buildUserPayload(user, session) {
     tenantId:        user.tenantId || null,
     assignedOutlets: user.assignedOutlets || [],
     viewingTenant:   null,
+    tenant:          null,  // effective tenant for this session
   };
 
-  // Attach the tenant the platform owner is currently viewing
-  if (user.role === 'platform_owner' && session?.viewAsTenantId) {
+  if (user.role === 'platform_owner') {
+    if (session?.viewAsTenantId) {
+      try {
+        const tenant = await Tenant.findById(session.viewAsTenantId, 'name slug currency orderPrefix isActive').lean();
+        if (tenant && tenant.isActive) {
+          base.viewingTenant = tenant;
+          base.tenant        = tenant;
+        } else {
+          session.viewAsTenantId = null;
+        }
+      } catch { /* ignore */ }
+    }
+  } else if (user.tenantId) {
     try {
-      const Tenant = require('../models/Tenant');
-      const tenant = await Tenant.findById(session.viewAsTenantId, 'name slug currency orderPrefix isActive').lean();
-      if (tenant && tenant.isActive) base.viewingTenant = tenant;
-      else session.viewAsTenantId = null; // stale/inactive — clear it
+      const tenant = await Tenant.findById(user.tenantId, 'name slug currency orderPrefix isActive').lean();
+      if (tenant) base.tenant = tenant;
     } catch { /* ignore */ }
   }
 

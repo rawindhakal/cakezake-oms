@@ -56,9 +56,7 @@ export default function Sidebar() {
     );
   }
 
-  // Determine the business name to show from the user's tenant context
-  // Fall back to "Order Manager" for generic display
-  const brandName = 'Order Manager';
+  const brandName = user?.tenant?.name || user?.viewingTenant?.name || 'Orders';
 
   return (
     <aside className="w-56 bg-white border-r border-gray-100 flex flex-col h-full min-h-screen">

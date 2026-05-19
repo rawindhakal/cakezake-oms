@@ -53,7 +53,8 @@ router.get('/summary-quick', async (req, res) => {
     const tm = tenantMatch(req);
 
     const rangeBase  = { ...tm, createdAt: { $gte: start, $lte: end }, isDeleted: { $ne: true } };
-    const activeBase = { ...tm, status: { $nin: ['Delivered','Cancelled'] }, isDeleted: { $ne: true } };
+    // totalDue = all non-cancelled orders where money is still owed, regardless of status
+    const totalDueBase = { ...tm, status: { $ne: 'Cancelled' }, 'payment.due': { $gt: 0 }, isDeleted: { $ne: true } };
 
     const [summaryAgg, totalDueAgg, statusCountsAgg] = await Promise.all([
       Order.aggregate([
@@ -61,7 +62,7 @@ router.get('/summary-quick', async (req, res) => {
         { $group: { _id: null, count: { $sum: 1 }, revenue: { $sum: '$payment.total' }, collected: { $sum: '$payment.advance' }, due: { $sum: '$payment.due' } } },
       ]),
       Order.aggregate([
-        { $match: activeBase },
+        { $match: totalDueBase },
         { $group: { _id: null, due: { $sum: '$payment.due' } } },
       ]),
       Order.aggregate([
@@ -108,8 +109,8 @@ router.get('/dashboard', async (req, res) => {
     const todayStart = new Date(); todayStart.setHours(0,0,0,0);
     const todayEnd   = new Date(); todayEnd.setHours(23,59,59,999);
 
-    const rangeBase  = { ...tm, createdAt: { $gte: start, $lte: end }, isDeleted: { $ne: true } };
-    const activeBase = { ...tm, status: { $nin: ['Delivered','Cancelled'] }, isDeleted: { $ne: true } };
+    const rangeBase    = { ...tm, createdAt: { $gte: start, $lte: end }, isDeleted: { $ne: true } };
+    const totalDueBase = { ...tm, status: { $ne: 'Cancelled' }, 'payment.due': { $gt: 0 }, isDeleted: { $ne: true } };
 
     const [
       summaryAgg, byStatus, byChannel, byCity, revenueChartRaw,
@@ -142,7 +143,7 @@ router.get('/dashboard', async (req, res) => {
         { $sort: { _id: 1 } },
         { $project: { date: '$_id', revenue: 1, orders: 1, _id: 0 } },
       ]),
-      Order.aggregate([{ $match: activeBase }, { $group: { _id: null, due: { $sum: '$payment.due' } } }]),
+      Order.aggregate([{ $match: totalDueBase }, { $group: { _id: null, due: { $sum: '$payment.due' } } }]),
       Order.aggregate([
         { $match: { ...tm, isDeleted: { $ne: true }, status: { $nin: ['Delivered','Cancelled'] } } },
         { $group: { _id: '$status', count: { $sum: 1 } } },

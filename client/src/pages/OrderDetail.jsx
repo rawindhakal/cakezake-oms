@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import dayjs from 'dayjs';
 import useOrderStore from '../store/orderStore';
 import useOutletStore from '../store/outletStore';
+import useAuthStore from '../store/authStore';
 import StatusBadge from '../components/StatusBadge';
 import api from '../lib/api';
 import { formatPhoneDisplay } from '../lib/phoneIntl';
@@ -26,9 +27,10 @@ function outletIdFromOrder(order) {
   return typeof o === 'object' && o._id != null ? o._id : o;
 }
 
-function buildWhatsAppUrl(order) {
+function buildWhatsAppUrl(order, businessName) {
   if (!order) return '#';
   const { sender, receiver, payment, delivery, orderNumber, items } = order;
+  const biz = businessName || 'Us';
   const trackLink = `${BASE_URL}/track?order=${orderNumber}`;
   const itemsList = (items || []).map((i) => `  - ${i.name}: NPR ${Number(i.price).toLocaleString('en-IN')}`).join('\n');
   const deliveryLine = order.fulfillmentType === 'pickup'
@@ -36,7 +38,7 @@ function buildWhatsAppUrl(order) {
     : `Delivery: ${dayjs(delivery?.date).format('DD MMM YYYY')}, ${delivery?.slot || ''} → ${receiver?.name}, ${receiver?.city || ''}`;
 
   const msg = [
-    `Hello ${sender?.name}! 🎂 Your CakeZake order is confirmed.`,
+    `Hello ${sender?.name}! 🎂 Your ${biz} order is confirmed.`,
     ``,
     `Order: *${orderNumber}*`,
     `Items:\n${itemsList}`,
@@ -48,7 +50,7 @@ function buildWhatsAppUrl(order) {
     ``,
     `Track your order: ${trackLink}`,
     ``,
-    `Thank you for choosing CakeZake! 🧁`,
+    `Thank you for choosing ${biz}! 🧁`,
   ].join('\n');
 
   const digits = String(sender?.phone || '').replace(/\D/g, '');
@@ -151,6 +153,7 @@ function ItemDetailCard({ item, onStatusChange }) {
                     src={url.includes('cloudinary.com') ? url.replace('/upload/', '/upload/w_120,h_120,c_fill/') : url}
                     alt="reference"
                     className="w-20 h-20 object-cover rounded-lg border border-gray-200 hover:opacity-90 transition-opacity"
+                    onError={(e) => { e.target.onerror = null; e.target.closest('a').style.display = 'none'; }}
                   />
                 </a>
               ))}
@@ -169,6 +172,7 @@ function ItemDetailCard({ item, onStatusChange }) {
                     src={url.includes('cloudinary.com') ? url.replace('/upload/', '/upload/w_120,h_120,c_fill/') : url}
                     alt="completed"
                     className="w-20 h-20 object-cover rounded-lg border-2 border-green-300 hover:opacity-90 transition-opacity"
+                    onError={(e) => { e.target.onerror = null; e.target.closest('a').style.display = 'none'; }}
                   />
                 </a>
               ))}
@@ -217,17 +221,27 @@ function Field({ label, value }) {
   );
 }
 
+const COLLECT_METHODS = ['Cash', 'eSewa', 'Khalti', 'Bank Transfer', 'QR'];
+
 export default function OrderDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { fetchOrder, currentOrder: order, updateStatus, deleteOrder, updateItemStatus } = useOrderStore();
   const { outlets, loaded, fetchOutlets } = useOutletStore();
+  const { user } = useAuthStore();
   const [statusOpen, setStatusOpen] = useState(false);
   const [outletOpen, setOutletOpen] = useState(false);
   const [riderOpen, setRiderOpen]   = useState(false);
   const [riders, setRiders]         = useState([]);
-  const [deleting, setDeleting]   = useState(false);
+  const [deleting, setDeleting]     = useState(false);
   const [smsSending, setSmsSending] = useState(false);
+  const [collectOpen, setCollectOpen]     = useState(false);
+  const [collectAmount, setCollectAmount] = useState('');
+  const [collectMethod, setCollectMethod] = useState('Cash');
+  const [collectNote, setCollectNote]     = useState('');
+  const [collecting, setCollecting]       = useState(false);
+
+  const businessName = user?.tenant?.name || user?.viewingTenant?.name || null;
 
   async function sendSmsConfirmation() {
     if (!window.confirm(`Send SMS confirmation to ${order?.sender?.name} (${order?.sender?.phone})?`)) return;
@@ -303,6 +317,33 @@ export default function OrderDetail() {
     setDeleting(false);
   }
 
+  async function handleCollect(e) {
+    e.preventDefault();
+    const amt = Number(collectAmount);
+    if (!amt || amt <= 0) return toast.error('Enter a valid amount');
+    setCollecting(true);
+    try {
+      const { data } = await api.patch(`/orders/${id}/collect`, {
+        amount: amt,
+        method: collectMethod,
+        note:   collectNote,
+      });
+      if (data.success) {
+        await fetchOrder(id);
+        setCollectOpen(false);
+        setCollectAmount('');
+        setCollectNote('');
+        toast.success(`NPR ${amt.toLocaleString('en-IN')} collected via ${collectMethod}`);
+      } else {
+        toast.error(data.message || 'Collection failed');
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Collection failed');
+    } finally {
+      setCollecting(false);
+    }
+  }
+
   if (!order) return <div className="p-6 text-gray-400">Loading...</div>;
 
   const stepIdx = STATUSES.indexOf(order.status);
@@ -344,7 +385,7 @@ export default function OrderDetail() {
 
           {/* WhatsApp click-to-chat */}
           <a
-            href={buildWhatsAppUrl(order)}
+            href={buildWhatsAppUrl(order, businessName)}
             target="_blank"
             rel="noopener noreferrer"
             title="Share order details on WhatsApp"
@@ -452,14 +493,73 @@ export default function OrderDetail() {
               <span className="text-gray-500">Advance</span>
               <span className="text-green-600">NPR {order.payment.advance?.toLocaleString('en-IN')}</span>
             </div>
-            <div className="flex justify-between">
+            <div className="flex justify-between items-center">
               <span className="text-gray-500">Due</span>
-              <span className={order.payment.due > 0 ? 'text-red-500 font-bold' : 'text-green-600'}>
-                NPR {order.payment.due?.toLocaleString('en-IN')}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className={order.payment.due > 0 ? 'text-red-500 font-bold' : 'text-green-600'}>
+                  NPR {order.payment.due?.toLocaleString('en-IN')}
+                </span>
+                {order.payment.due > 0 && order.status !== 'Cancelled' && (
+                  <button
+                    onClick={() => { setCollectAmount(String(order.payment.due)); setCollectOpen(true); }}
+                    className="text-xs bg-green-500 hover:bg-green-600 text-white font-semibold px-2.5 py-1 rounded-lg transition-colors"
+                  >
+                    Collect
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
+
+        {/* Collect Payment Modal */}
+        {collectOpen && (
+          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+              <h3 className="font-bold text-lg mb-1">Collect Payment</h3>
+              <p className="text-sm text-gray-400 mb-4">
+                Outstanding due: <span className="font-semibold text-red-500">NPR {order.payment.due?.toLocaleString('en-IN')}</span>
+              </p>
+              <form onSubmit={handleCollect} className="space-y-3">
+                <div>
+                  <label className="label">Amount (NPR) *</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max={order.payment.due}
+                    step="0.01"
+                    className="input"
+                    value={collectAmount}
+                    onChange={(e) => setCollectAmount(e.target.value)}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="label">Payment Method *</label>
+                  <select className="input" value={collectMethod} onChange={(e) => setCollectMethod(e.target.value)}>
+                    {COLLECT_METHODS.map((m) => <option key={m}>{m}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Note (optional)</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="e.g. collected on delivery"
+                    value={collectNote}
+                    onChange={(e) => setCollectNote(e.target.value)}
+                  />
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <button type="button" onClick={() => setCollectOpen(false)} className="btn-secondary flex-1">Cancel</button>
+                  <button type="submit" disabled={collecting} className="btn-primary flex-1">
+                    {collecting ? 'Recording…' : 'Record Collection'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Outlet Panel ─────────────────────────────────────────── */}
@@ -688,6 +788,7 @@ export default function OrderDetail() {
                   src={order.delivery.signature}
                   alt="Delivery signature"
                   className="border border-gray-200 rounded-lg bg-white max-w-xs h-24 object-contain"
+                  onError={(e) => { e.target.onerror = null; e.target.style.display = 'none'; }}
                 />
               </div>
               {order.delivery.signedAt && (
