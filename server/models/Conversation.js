@@ -12,6 +12,8 @@ const ConversationSchema = new mongoose.Schema({
   linkedOrder:    { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
   assignedTo:     { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   status:         { type: String, enum: ['open', 'resolved', 'snoozed'], default: 'open' },
+  aiEnabled:      { type: Boolean, default: true },
+  escalated:      { type: Boolean, default: false },
   unreadCount:    { type: Number, default: 0 },
   lastMessage:    { type: String, default: '' },
   lastMessageAt:  { type: Date, default: Date.now },

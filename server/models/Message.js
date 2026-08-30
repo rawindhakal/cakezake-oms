@@ -8,6 +8,7 @@ const MessageSchema = new mongoose.Schema({
   mediaType:    { type: String, enum: ['image', 'video', 'audio', 'document', 'sticker', 'location'] },
   externalId:   { type: String },
   sentBy:       { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  isBot:        { type: Boolean, default: false },
   sentAt:       { type: Date, default: Date.now },
   readAt:       { type: Date },
   status:       { type: String, enum: ['sent', 'delivered', 'read', 'failed'], default: 'sent' },

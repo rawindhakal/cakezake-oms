@@ -118,6 +118,15 @@ const useInboxStore = create((set, get) => ({
 
     outletIds.forEach(id => socket.emit('join_outlet', id));
 
+    socket.on('conversation_updated', ({ conversationId, escalated }) => {
+      set(s => ({
+        conversations: s.conversations.map(c => c._id === conversationId ? { ...c, escalated } : c),
+        activeConversation: s.activeConversation?._id === conversationId
+          ? { ...s.activeConversation, escalated }
+          : s.activeConversation,
+      }));
+    });
+
     socket.on('new_message', ({ conversationId, message }) => {
       const { activeConversation } = get();
 

@@ -5,10 +5,76 @@ const Conversation  = require('../models/Conversation');
 const Message       = require('../models/Message');
 const { sendMetaMessage, getMetaPages, exchangeCodeForToken, getLongLivedToken, fetchIgProfile } = require('../utils/metaApi');
 const { getConfig, invalidateCache } = require('../utils/platformConfig');
+const { generateAiReply } = require('../utils/aiReply');
 const PlatformConfig = require('../models/PlatformConfig');
 const { getIo } = require('../socket');
 
 const router = express.Router();
+
+// ── AI auto-reply ─────────────────────────────────────────────────────────────
+// Debounced per-conversation so a burst of customer messages produces one reply.
+
+const AI_DEBOUNCE_MS = 4000;
+const aiTimers = new Map();
+
+function scheduleAutoReply(conversationId) {
+  const id = conversationId.toString();
+  if (aiTimers.has(id)) clearTimeout(aiTimers.get(id));
+  aiTimers.set(id, setTimeout(() => {
+    aiTimers.delete(id);
+    runAutoReply(id).catch(err => console.error('AI auto-reply error:', err.message));
+  }, AI_DEBOUNCE_MS));
+}
+
+function cancelAutoReply(conversationId) {
+  const id = conversationId.toString();
+  if (aiTimers.has(id)) {
+    clearTimeout(aiTimers.get(id));
+    aiTimers.delete(id);
+  }
+}
+
+async function runAutoReply(conversationId) {
+  const conv = await Conversation.findById(conversationId).populate('account');
+  if (!conv || !conv.account || !conv.aiEnabled || conv.status === 'resolved') return;
+  if (!['whatsapp', 'instagram', 'facebook'].includes(conv.platform)) return;
+
+  const history = await Message.find({ conversation: conversationId }).sort({ sentAt: 1 }).limit(20);
+  if (!history.length || history[history.length - 1].direction !== 'inbound') return; // staff/bot already replied
+
+  const customerPhone = conv.platform === 'whatsapp' ? conv.externalId : null;
+  const result = await generateAiReply({ history, customerPhone });
+  if (result.skip) return;
+
+  if (result.escalate) {
+    await Conversation.findByIdAndUpdate(conversationId, { escalated: true });
+    emitToOutlet(conv.outlet.toString(), 'conversation_updated', { conversationId, escalated: true });
+    return;
+  }
+
+  const { platform, pageId, accessToken } = conv.account;
+  let externalId;
+  try {
+    const sendResult = await sendMetaMessage(platform, pageId, accessToken, conv.externalId, result.reply);
+    externalId = sendResult.messages?.[0]?.id || sendResult.message_id;
+  } catch (err) {
+    console.error('AI send failed:', err.message);
+    return;
+  }
+
+  const message = await Message.create({
+    conversation: conversationId,
+    direction:    'outbound',
+    body:         result.reply,
+    externalId,
+    isBot:        true,
+    sentAt:       new Date(),
+    status:       'sent',
+  });
+
+  await Conversation.findByIdAndUpdate(conversationId, { lastMessage: result.reply, lastMessageAt: message.sentAt });
+  emitToOutlet(conv.outlet.toString(), 'new_message', { conversationId, message });
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -95,6 +161,15 @@ const CONFIG_KEYS = [
   { key: 'META_WEBHOOK_VERIFY_TOKEN', label: 'Webhook Verify Token',      platform: 'meta',    secret: true  },
   { key: 'TIKTOK_CLIENT_KEY',         label: 'TikTok Client Key',         platform: 'tiktok',  secret: false },
   { key: 'TIKTOK_CLIENT_SECRET',      label: 'TikTok Client Secret',      platform: 'tiktok',  secret: true  },
+  { key: 'AI_ENABLED',                label: 'AI Auto-Reply Enabled',     platform: 'ai',      secret: false },
+  { key: 'GEMINI_API_KEY',            label: 'Gemini API Key',            platform: 'ai',      secret: true  },
+  { key: 'AI_MODEL',                  label: 'Gemini Model',              platform: 'ai',      secret: false },
+  { key: 'AI_SYSTEM_PROMPT',          label: 'System Prompt',             platform: 'ai',      secret: false },
+  { key: 'AI_KNOWLEDGE_BASE',         label: 'Knowledge Base',            platform: 'ai',      secret: false },
+  { key: 'AI_ESCALATION_KEYWORDS',    label: 'Escalation Keywords',       platform: 'ai',      secret: false },
+  { key: 'AI_BUSINESS_HOURS_START',   label: 'Business Hours Start',      platform: 'ai',      secret: false },
+  { key: 'AI_BUSINESS_HOURS_END',     label: 'Business Hours End',        platform: 'ai',      secret: false },
+  { key: 'AI_BUSINESS_HOURS_TZ',      label: 'Business Hours Timezone',   platform: 'ai',      secret: false },
 ];
 
 router.get('/config', requireAuth, async (req, res) => {
@@ -320,6 +395,7 @@ async function handleWhatsApp(val) {
     });
 
     emitToOutlet(account.outlet.toString(), 'new_message', { conversationId: conv._id, message });
+    scheduleAutoReply(conv._id);
   }
 }
 
@@ -352,6 +428,7 @@ async function handleInstagram(entry) {
     });
 
     emitToOutlet(account.outlet.toString(), 'new_message', { conversationId: conv._id, message });
+    scheduleAutoReply(conv._id);
   }
 }
 
@@ -378,6 +455,7 @@ async function handleFacebook(entry) {
     });
 
     emitToOutlet(account.outlet.toString(), 'new_message', { conversationId: conv._id, message });
+    scheduleAutoReply(conv._id);
   }
 }
 
@@ -456,9 +534,14 @@ router.get('/conversations/:id', requireAuth, async (req, res) => {
 
 router.patch('/conversations/:id', requireAuth, async (req, res) => {
   try {
-    const allowed = ['status', 'assignedTo'];
+    const allowed = ['status', 'assignedTo', 'aiEnabled'];
     const update  = {};
-    allowed.forEach(k => { if (req.body[k] !== undefined) update[k] = req.body[k] || null; });
+    allowed.forEach(k => {
+      if (req.body[k] === undefined) return;
+      update[k] = k === 'aiEnabled' ? !!req.body[k] : (req.body[k] || null);
+    });
+
+    if (update.aiEnabled === false) cancelAutoReply(req.params.id);
 
     const conv = await Conversation.findByIdAndUpdate(req.params.id, update, { new: true })
       .populate('assignedTo', 'name');
@@ -511,6 +594,8 @@ router.post('/conversations/:id/reply', requireAuth, async (req, res) => {
     const conv = await Conversation.findById(req.params.id).populate('account');
     if (!conv) return res.status(404).json({ success: false, message: 'Conversation not found' });
 
+    cancelAutoReply(conv._id); // a human is replying — don't let a queued AI reply land too
+
     const { platform, pageId, accessToken } = conv.account;
     let externalId;
 
@@ -530,7 +615,7 @@ router.post('/conversations/:id/reply', requireAuth, async (req, res) => {
     });
 
     await Conversation.findByIdAndUpdate(conv._id, {
-      lastMessage: text.trim(), lastMessageAt: message.sentAt,
+      lastMessage: text.trim(), lastMessageAt: message.sentAt, escalated: false,
     });
 
     const populated = await Message.findById(message._id).populate('sentBy', 'name');

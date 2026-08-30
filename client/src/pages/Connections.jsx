@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { Trash2, CheckCircle, AlertCircle, Wifi, WifiOff, Eye, EyeOff, Save, Settings2, ChevronDown, RefreshCw } from 'lucide-react';
+import { Trash2, CheckCircle, AlertCircle, Wifi, WifiOff, Eye, EyeOff, Save, Settings2, ChevronDown, RefreshCw, Bot } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../lib/api';
 
@@ -183,6 +183,208 @@ function ApiConfigSection({ onAppIdLoaded }) {
               <button onClick={() => setEditing(true)}
                 className="text-xs text-brand-600 hover:text-brand-700 font-medium px-3 py-1.5 rounded-lg hover:bg-brand-50 transition-colors">
                 Edit configuration
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── AI Auto-Reply Section ─────────────────────────────────────────────────────
+
+const AI_KEYS = [
+  'AI_ENABLED', 'GEMINI_API_KEY', 'AI_MODEL', 'AI_SYSTEM_PROMPT',
+  'AI_KNOWLEDGE_BASE', 'AI_ESCALATION_KEYWORDS',
+  'AI_BUSINESS_HOURS_START', 'AI_BUSINESS_HOURS_END', 'AI_BUSINESS_HOURS_TZ',
+];
+
+function AiConfigSection() {
+  const [config, setConfig]   = useState({});
+  const [edits, setEdits]     = useState({});
+  const [showKey, setShowKey] = useState(false);
+  const [saving, setSaving]   = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [open, setOpen]       = useState(false);
+
+  function load() {
+    api.get('/social/config').then(r => {
+      const map = {};
+      (r.data.config || []).filter(c => c.platform === 'ai').forEach(c => { map[c.key] = c; });
+      setConfig(map);
+    }).catch(() => {});
+  }
+
+  useEffect(load, []);
+
+  function val(key, fallback = '') {
+    if (edits[key] !== undefined) return edits[key];
+    const cur = config[key];
+    return cur?.isSet ? cur.value : fallback;
+  }
+
+  function setVal(key, value) {
+    setEdits(d => ({ ...d, [key]: value }));
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    const updates = AI_KEYS.filter(k => edits[k] !== undefined).map(key => ({ key, value: edits[key] }));
+    try {
+      await api.put('/social/config', { updates });
+      toast.success('AI settings saved');
+      load();
+      setEdits({});
+      setEditing(false);
+    } catch {
+      toast.error('Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const enabled = val('AI_ENABLED') === 'true';
+  const label = "block text-xs font-semibold text-gray-500 mb-1";
+  const input = "w-full border border-gray-200 rounded-lg px-3 py-1.5 text-xs disabled:bg-gray-50 disabled:text-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-300";
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden mb-6">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <Bot size={16} className="text-gray-500" />
+          <span className="font-semibold text-gray-800 text-sm">AI Auto-Reply</span>
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${enabled ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-400'}`}>
+            {enabled ? 'enabled' : 'disabled'}
+          </span>
+        </div>
+        <ChevronDown size={16} className={`text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="border-t border-gray-100">
+          <div className="px-5 py-4 space-y-4">
+            <p className="text-xs text-gray-400">
+              Uses Google Gemini to answer customers automatically from a knowledge base, look up real order status, and hand off to a
+              human whenever it's unsure. Get a free API key (no card needed) at{' '}
+              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="text-brand-600 underline">
+                aistudio.google.com/apikey
+              </a>.
+            </p>
+
+            <div>
+              <label className={label}>Enabled</label>
+              <div className="flex gap-2">
+                {[['true', 'On'], ['false', 'Off']].map(([v, l]) => (
+                  <button
+                    key={v}
+                    type="button"
+                    disabled={!editing}
+                    onClick={() => setVal('AI_ENABLED', v)}
+                    className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-colors ${
+                      val('AI_ENABLED') === v ? 'bg-brand-500 text-white' : 'bg-gray-100 text-gray-600'
+                    } disabled:opacity-50`}
+                  >
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className={label}>Gemini API Key</label>
+              <div className="relative">
+                <input
+                  type={showKey ? 'text' : 'password'}
+                  value={val('GEMINI_API_KEY')}
+                  onChange={e => setVal('GEMINI_API_KEY', e.target.value)}
+                  disabled={!editing}
+                  placeholder={config.GEMINI_API_KEY?.isSet ? '(saved)' : 'Not set'}
+                  className={`${input} pr-8`}
+                />
+                <button type="button" onClick={() => setShowKey(v => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                  {showKey ? <EyeOff size={12} /> : <Eye size={12} />}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className={label}>Model</label>
+              <input
+                value={val('AI_MODEL')}
+                onChange={e => setVal('AI_MODEL', e.target.value)}
+                disabled={!editing}
+                placeholder="gemini-2.5-flash"
+                className={input}
+              />
+            </div>
+
+            <div>
+              <label className={label}>System Prompt</label>
+              <textarea
+                value={val('AI_SYSTEM_PROMPT')}
+                onChange={e => setVal('AI_SYSTEM_PROMPT', e.target.value)}
+                disabled={!editing}
+                rows={3}
+                placeholder="You are a helpful assistant for CakeZake, a cake and gifting shop. Keep replies short and friendly."
+                className={input}
+              />
+            </div>
+
+            <div>
+              <label className={label}>Knowledge Base — one FAQ per line, formatted as: Question || Answer</label>
+              <textarea
+                value={val('AI_KNOWLEDGE_BASE')}
+                onChange={e => setVal('AI_KNOWLEDGE_BASE', e.target.value)}
+                disabled={!editing}
+                rows={5}
+                placeholder={'What are your store hours? || We are open 9am to 7pm every day.\nDo you deliver to Damak? || Yes, delivery to Damak is available.'}
+                className={`${input} font-mono`}
+              />
+            </div>
+
+            <div>
+              <label className={label}>Escalation Keywords — comma separated, forces hand-off to a human</label>
+              <input
+                value={val('AI_ESCALATION_KEYWORDS')}
+                onChange={e => setVal('AI_ESCALATION_KEYWORDS', e.target.value)}
+                disabled={!editing}
+                placeholder="refund, complaint, cancel, discount"
+                className={input}
+              />
+            </div>
+
+            <div>
+              <label className={label}>Business Hours — leave both empty for the AI to answer 24/7, or set both so it only answers outside these hours</label>
+              <div className="flex items-center gap-2">
+                <input type="time" value={val('AI_BUSINESS_HOURS_START')} onChange={e => setVal('AI_BUSINESS_HOURS_START', e.target.value)} disabled={!editing} className={input} />
+                <span className="text-xs text-gray-400">to</span>
+                <input type="time" value={val('AI_BUSINESS_HOURS_END')} onChange={e => setVal('AI_BUSINESS_HOURS_END', e.target.value)} disabled={!editing} className={input} />
+                <input value={val('AI_BUSINESS_HOURS_TZ', 'Asia/Kathmandu')} onChange={e => setVal('AI_BUSINESS_HOURS_TZ', e.target.value)} disabled={!editing} placeholder="Asia/Kathmandu" className={`${input} w-40 flex-shrink-0`} />
+              </div>
+            </div>
+          </div>
+
+          <div className="px-5 py-3 border-t border-gray-50 flex items-center gap-2">
+            {editing ? (
+              <>
+                <button onClick={handleSave} disabled={saving || !Object.keys(edits).length}
+                  className="flex items-center gap-1.5 text-xs bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg transition-colors">
+                  <Save size={12} /> {saving ? 'Saving…' : 'Save'}
+                </button>
+                <button onClick={() => { setEditing(false); setEdits({}); }}
+                  className="text-xs text-gray-500 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-gray-100 transition-colors">
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button onClick={() => setEditing(true)}
+                className="text-xs text-brand-600 hover:text-brand-700 font-medium px-3 py-1.5 rounded-lg hover:bg-brand-50 transition-colors">
+                Edit AI settings
               </button>
             )}
           </div>
@@ -469,6 +671,9 @@ export default function Connections() {
 
       {/* API Config (collapsible) */}
       <ApiConfigSection onAppIdLoaded={handleAppIdLoaded} />
+
+      {/* AI Auto-Reply (collapsible) */}
+      <AiConfigSection />
 
       {/* Outlet selector */}
       {outlets.length > 1 && (

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Send, Search, CheckCheck, ArrowLeft, UserCheck, RefreshCw, ShoppingBag, Plus, Minus, X, CheckCircle2 } from 'lucide-react';
+import { Send, Search, CheckCheck, ArrowLeft, UserCheck, RefreshCw, ShoppingBag, Plus, Minus, X, CheckCircle2, Bot } from 'lucide-react';
 import toast from 'react-hot-toast';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -117,10 +117,15 @@ function MessageBubble({ msg, isOwn }) {
         {!isOwn && msg.sentBy?.name && (
           <p className="text-xs text-gray-400 mb-1 ml-1">{msg.sentBy.name}</p>
         )}
+        {isOwn && msg.isBot && (
+          <p className="text-xs text-purple-400 mb-1 mr-1 text-right flex items-center justify-end gap-1">
+            <Bot size={10} /> AI
+          </p>
+        )}
         <div
           className={`px-3 py-2 rounded-2xl text-sm leading-relaxed ${
             isOwn
-              ? 'bg-brand-500 text-white rounded-br-sm'
+              ? msg.isBot ? 'bg-purple-500 text-white rounded-br-sm' : 'bg-brand-500 text-white rounded-br-sm'
               : 'bg-white border border-gray-100 text-gray-800 rounded-bl-sm shadow-sm'
           }`}
         >
@@ -539,10 +544,24 @@ function ChatPanel({ conv, onBack }) {
             <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full ${P?.bg} ${P?.color}`}>
               <Icon size={10} /> {P?.label}
             </span>
+            {conv.escalated && (
+              <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600">
+                Needs human
+              </span>
+            )}
           </div>
           <p className="text-xs text-gray-400">{conv.account?.label} · {conv.outlet?.name}</p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            title={conv.aiEnabled ? 'AI auto-reply is on for this conversation' : 'AI auto-reply is off for this conversation'}
+            onClick={() => updateConversation(conv._id, { aiEnabled: !conv.aiEnabled })}
+            className={`text-xs px-2.5 py-1 rounded-full font-medium transition-colors flex items-center gap-1 ${
+              conv.aiEnabled ? 'bg-purple-50 text-purple-600' : 'bg-gray-100 text-gray-400'
+            }`}
+          >
+            <Bot size={12} /> AI {conv.aiEnabled ? 'On' : 'Off'}
+          </button>
           <button
             onClick={() => updateConversation(conv._id, { status: conv.status === 'open' ? 'resolved' : 'open' })}
             className={`text-xs px-2.5 py-1 rounded-full font-medium transition-colors ${statusColor}`}
